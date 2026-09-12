@@ -319,9 +319,17 @@
                                 <div class="ws-row"><label class="ws-field">Seerr API key</label><input type="password" class="ws-input" id="jellyseerrApiKey" placeholder="Settings → General → API Key" /></div>
                                 <div style="display:flex;gap:10px;align-items:center;"><button type="button" class="ws-btn" id="testJellyseerrBtn">Test connection</button><span id="jellyseerrTestStatus" class="ws-muted" style="font-size:12.5px;"></span></div>
                             </div>
-                            <div class="ws-panel" style="padding:18px;">
+                            <div class="ws-panel" style="padding:18px;margin-bottom:14px;">
                                 <div class="ws-sect-title" style="margin-top:0;"><h2>Anonymous telemetry</h2><span class="rule"></span></div>
                                 <label class="ws-checks" style="display:flex;gap:9px;align-items:flex-start;cursor:pointer;font-size:13px;"><input type="checkbox" id="telemetryEnabled" /><span>Send anonymous usage telemetry<span class="desc" style="display:block;color:var(--ws-faint);font-size:11.5px;">One ping a week: versions, which features are on, bucketed counts. Never titles, usernames, or exact numbers. Off by default.</span></span></label>
+                            </div>
+                            <div class="ws-panel" style="padding:18px;">
+                                <div class="ws-sect-title" style="margin-top:0;"><h2>Jellyfin Enhanced reviews</h2><span class="rule"></span></div>
+                                <p class="ws-muted" style="font-size:12.5px;margin-top:0;">Post reviews and ratings written in the Jellyfin Enhanced plugin to the matching Letterboxd (films) or Serializd (TV) diary. JE keeps its own review store and never writes Jellyfin's rating field, so these never reach a diary on their own.</p>
+                                <label class="ws-checks" style="display:flex;gap:9px;align-items:flex-start;cursor:pointer;font-size:13px;margin-bottom:10px;"><input type="checkbox" id="enhancedReviewSyncEnabled" /><span>Sync Jellyfin Enhanced reviews<span class="desc" style="display:block;color:var(--ws-faint);font-size:11.5px;">Off by default. Runs every 15 minutes and on demand. Season-only entries are skipped — Serializd has no season-level reviews.</span></span></label>
+                                <label class="ws-checks" style="display:flex;gap:9px;align-items:flex-start;cursor:pointer;font-size:13px;margin-bottom:10px;"><input type="checkbox" id="enhancedReviewBackfill" /><span>Include reviews written before the sync was enabled<span class="desc" style="display:block;color:var(--ws-faint);font-size:11.5px;">Untick to post only reviews written from now on. Each entry is dated to when it was written, not when the sync ran.</span></span></label>
+                                <div class="ws-row"><label class="ws-field">reviews.json path</label><input type="text" class="ws-input" id="enhancedReviewsPath" placeholder="(leave empty for Jellyfin Enhanced's default location)" /></div>
+                                <div style="display:flex;gap:10px;align-items:center;"><button type="button" class="ws-btn" id="syncEnhancedNowBtn">Sync now</button><span id="enhancedReviewStatus" class="ws-muted" style="font-size:12.5px;"></span></div>
                             </div>
                         </section>
 
@@ -428,6 +436,10 @@
                                     document.getElementById('jellyseerrUrl').value = c.JellyseerrUrl || '';
                                     document.getElementById('jellyseerrApiKey').value = c.JellyseerrApiKey || '';
                                     document.getElementById('telemetryEnabled').checked = !!(c.Telemetry && c.Telemetry.Enabled);
+                                    document.getElementById('enhancedReviewSyncEnabled').checked = c.EnhancedReviewSyncEnabled === true;
+                                    document.getElementById('enhancedReviewBackfill').checked = c.EnhancedReviewSyncBackfill !== false;
+                                    document.getElementById('enhancedReviewsPath').value = c.EnhancedReviewsPath || '';
+                                    self.loadEnhancedReviewStatus();
                                 });
                         },
 
@@ -477,6 +489,7 @@
                             document.getElementById('runWatchlistBtn').addEventListener('click', function () { self.runWatchlist(); });
                             document.getElementById('actPrev').addEventListener('click', function () { if (self.actOffset > 0) { self.actOffset -= self.pageSize; self.loadActivity(false); } });
                             document.getElementById('actNext').addEventListener('click', function () { if (self.actOffset + self.pageSize < self.actTotal) { self.actOffset += self.pageSize; self.loadActivity(false); } });
+                            document.getElementById('syncEnhancedNowBtn').addEventListener('click', function () { self.syncEnhancedNow(); });
                             document.getElementById('saveIntegrationsBtn').addEventListener('click', function () { self.saveIntegrations(); });
                             document.getElementById('testJellyseerrBtn').addEventListener('click', function () { self.testJellyseerr(); });
                             document.getElementById('logsRefreshBtn').addEventListener('click', function () { self.loadLogs(); });
@@ -939,12 +952,38 @@
                         },
 
                         /* ===== Integrations & logs ===== */
+                        loadEnhancedReviewStatus: function () {
+                            var el = document.getElementById('enhancedReviewStatus');
+                            ApiClient.getJSON(ApiClient.getUrl('Jellyfin.Plugin.LetterboxdSync/EnhancedReviews/Status')).then(function (s) {
+                                var bits = [];
+                                if (!s.storePresent) {
+                                    bits.push('no Jellyfin Enhanced review store found');
+                                } else {
+                                    bits.push(s.storeEntries + ' review(s): ' + s.pending + ' pending, ' + s.synced + ' synced, ' + s.skipped + ' skipped, ' + s.failed + ' failed');
+                                }
+                                if (s.lastRun) bits.push('last run: ' + s.lastRun);
+                                el.textContent = bits.join(' · ');
+                            }).catch(function () { el.textContent = ''; });
+                        },
+
+                        syncEnhancedNow: function () {
+                            var self = this;
+                            var el = document.getElementById('enhancedReviewStatus');
+                            el.textContent = 'Syncing…';
+                            ApiClient.ajax({ url: ApiClient.getUrl('Jellyfin.Plugin.LetterboxdSync/EnhancedReviews/SyncNow'), type: 'POST', contentType: 'application/json' })
+                                .then(function () { setTimeout(function () { self.loadEnhancedReviewStatus(); }, 1500); },
+                                    function () { el.innerHTML = '<span class="ws-red">Sync could not start. Enable it above and Save first.</span>'; });
+                        },
+
                         saveIntegrations: function () {
                             var self = this;
                             self.config.JellyseerrUrl = document.getElementById('jellyseerrUrl').value.trim() || null;
                             self.config.JellyseerrApiKey = document.getElementById('jellyseerrApiKey').value.trim() || null;
                             self.config.Telemetry = self.config.Telemetry || {};
                             self.config.Telemetry.Enabled = document.getElementById('telemetryEnabled').checked;
+                            self.config.EnhancedReviewSyncEnabled = document.getElementById('enhancedReviewSyncEnabled').checked;
+                            self.config.EnhancedReviewSyncBackfill = document.getElementById('enhancedReviewBackfill').checked;
+                            self.config.EnhancedReviewsPath = document.getElementById('enhancedReviewsPath').value.trim() || null;
                             ApiClient.updatePluginConfiguration(self.PluginId, self.config).then(function () { Dashboard.processPluginConfigurationUpdateResult(); });
                         },
                         testJellyseerr: function () {

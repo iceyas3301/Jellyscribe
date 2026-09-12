@@ -1,5 +1,10 @@
 # [Jellyscribe](https://jellyscribe.dev/)
 
+> **This is Iven's fork** (`iceyas3301/Jellyscribe`) of the upstream project. It adds one feature —
+> syncing [Jellyfin Enhanced](https://github.com/n00bcodr/Jellyfin-Enhanced) reviews to Letterboxd
+> and Serializd. Everything else is upstream, and the fork is re-synced with upstream every two
+> weeks. See [FORK.md](FORK.md) for what changed, the install notes, and the sync gate.
+
 [![CI](https://github.com/builtbyproxy/Jellyscribe/actions/workflows/ci.yml/badge.svg)](https://github.com/builtbyproxy/Jellyscribe/actions/workflows/ci.yml)
 [![Release](https://github.com/builtbyproxy/Jellyscribe/actions/workflows/release.yml/badge.svg)](https://github.com/builtbyproxy/Jellyscribe/actions/workflows/release.yml)
 [![codecov](https://codecov.io/gh/builtbyproxy/Jellyscribe/branch/main/graph/badge.svg)](https://codecov.io/gh/builtbyproxy/Jellyscribe)
