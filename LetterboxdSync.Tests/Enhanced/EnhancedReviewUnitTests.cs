@@ -32,6 +32,7 @@ public class EnhancedReviewUnitTests : IDisposable
         EnhancedReviewStore.PathOverrideForTesting = null;
         EnhancedReviewSyncState.PathOverrideForTesting = Path.Combine(_tempDir, "state.json");
         EnhancedReviewSyncState.ResetForTesting();
+        EnhancedReviewEntry.DiaryTimeZoneOverrideForTesting = UtcPlus8;
     }
 
     public void Dispose()
@@ -39,8 +40,17 @@ public class EnhancedReviewUnitTests : IDisposable
         EnhancedReviewStore.PathOverrideForTesting = null;
         EnhancedReviewSyncState.PathOverrideForTesting = null;
         EnhancedReviewSyncState.ResetForTesting();
+        EnhancedReviewEntry.DiaryTimeZoneOverrideForTesting = null;
         try { Directory.Delete(_tempDir, recursive: true); } catch { }
     }
+
+    /// <summary>
+    /// Fixed zone for date assertions. The real value is the server's local zone (Asia/Manila on the
+    /// deployment this was built against), and pinning it keeps the mapping — not the test machine's
+    /// clock settings — under test.
+    /// </summary>
+    internal static TimeZoneInfo UtcPlus8 { get; } =
+        TimeZoneInfo.CreateCustomTimeZone("test-utc-plus-8", TimeSpan.FromHours(8), "UTC+08", "UTC+08");
 
     // ── Key parsing ─────────────────────────────────────────────────────────────
 
@@ -155,7 +165,27 @@ public class EnhancedReviewUnitTests : IDisposable
     {
         var entry = Entry(created: "2026-07-16T20:51:13.0000000Z");
 
-        Assert.Equal(new DateTime(2026, 7, 16), entry.DiaryDateUtc);
+        // 20:51 UTC is 04:51 on the 17th in UTC+08 — the local day the user wrote it.
+        Assert.Equal(new DateTime(2026, 7, 17), entry.DiaryDate);
+    }
+
+    [Fact]
+    public void Entry_DiaryDate_KeepsAnAfterMidnightLocalWriteOnTheLocalDay()
+    {
+        // The live bug: this review was written at 04:03 on Sep 12 in Asia/Manila but stamped UTC,
+        // so a UTC-derived date posted it to Letterboxd as Sep 11 — while the playback entry for the
+        // same viewing was Sep 12, showing one watch as two diary entries.
+        var entry = Entry(created: "2026-09-11T20:03:15.0000000Z");
+
+        Assert.Equal(new DateTime(2026, 9, 12), entry.DiaryDate);
+    }
+
+    [Fact]
+    public void Entry_DiaryDate_FallsBackToUpdatedAtWhenCreationIsMissing()
+    {
+        var entry = Entry(created: null, updated: "2026-07-16T20:51:13.0000000Z");
+
+        Assert.Equal(new DateTime(2026, 7, 17), entry.DiaryDate);
     }
 
     [Fact]

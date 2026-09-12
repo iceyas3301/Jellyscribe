@@ -323,7 +323,7 @@ public sealed class EnhancedReviewSyncRunner
                     entry.HasText ? entry.Content : null,
                     containsSpoilers: false,
                     isRewatch: false,
-                    date: entry.DiaryDateUtc?.ToString("yyyy-MM-dd"),
+                    date: entry.DiaryDate?.ToString("yyyy-MM-dd"),
                     rating: entry.LetterboxdRating,
                     tmdbId: key.TmdbId).ConfigureAwait(false);
 
@@ -331,7 +331,7 @@ public sealed class EnhancedReviewSyncRunner
                 _logger.LogInformation(
                     "Enhanced review posted to Letterboxd: tmdb={TmdbId} as={LetterboxdUsername} " +
                     "hasText={HasText} rating={Rating} date={Date}",
-                    key.TmdbId, account.LetterboxdUsername, entry.HasText, entry.LetterboxdRating, entry.DiaryDateUtc);
+                    key.TmdbId, account.LetterboxdUsername, entry.HasText, entry.LetterboxdRating, entry.DiaryDate);
             }
             catch (Exception ex)
             {
@@ -439,7 +439,7 @@ public sealed class EnhancedReviewSyncRunner
             TmdbId = key.TmdbId,
             Username = username,
             Timestamp = DateTime.UtcNow,
-            ViewingDate = entry.DiaryDateUtc,
+            ViewingDate = entry.DiaryDate,
             Status = anySuccess ? SyncStatus.Success : SyncStatus.Failed,
             Error = anySuccess ? null : summary.Errors.LastOrDefault(),
             Source = SyncEventSource

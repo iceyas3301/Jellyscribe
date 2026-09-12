@@ -26,6 +26,38 @@ public sealed class EnhancedReviewEntry
 
     public bool HasText => !string.IsNullOrWhiteSpace(Content);
 
+    /// <summary>Test hook: pins the diary timezone so date assertions don't depend on the machine.</summary>
+    internal static TimeZoneInfo? DiaryTimeZoneOverrideForTesting { get; set; }
+
+    /// <summary>
+    /// Zone diary dates are computed in: the server's local zone, matching how the playback path
+    /// stamps its entries (DateTime.Now.Date). Left overridable rather than read inline so the
+    /// date mapping can be asserted deterministically.
+    /// </summary>
+    internal static TimeZoneInfo DiaryTimeZone => DiaryTimeZoneOverrideForTesting ?? ResolveLocalZone();
+
+    /// <summary>
+    /// Resolves the container's zone the way the runtime's own clock does: TZ first, then the system
+    /// default. The TZ env var matters here because a container can set TZ while /etc/localtime still
+    /// points at UTC — libc honours TZ (the value the playback path's DateTime.Now reports), so
+    /// trusting /etc/localtime alone would put diary dates a day out.
+    /// </summary>
+    private static TimeZoneInfo ResolveLocalZone()
+    {
+        var tz = Environment.GetEnvironmentVariable("TZ");
+        if (!string.IsNullOrWhiteSpace(tz))
+        {
+            try
+            {
+                return TimeZoneInfo.FindSystemTimeZoneById(tz.Trim());
+            }
+            catch (TimeZoneNotFoundException) { }
+            catch (InvalidTimeZoneException) { }
+        }
+
+        return TimeZoneInfo.Local;
+    }
+
     /// <summary>JE stores 1–5 in 0.5 steps, which is already Letterboxd's scale.</summary>
     public double? LetterboxdRating
     {
@@ -50,8 +82,15 @@ public sealed class EnhancedReviewEntry
     /// The date the resulting diary entry should carry: JE's creation date, so a backfill of
     /// older reviews lands on the day each review was written rather than the day the sync
     /// first ran.
+    ///
+    /// Computed in <see cref="DiaryTimeZone"/>, not UTC. The diary date is a local-calendar
+    /// concept: taking it in UTC dates every review written before 08:00 in Asia/Manila to the
+    /// previous day, which also puts a review on a different day than the playback entry for the
+    /// same viewing — one watch, two diary entries.
     /// </summary>
-    public DateTime? DiaryDateUtc => (CreatedAt ?? UpdatedAt)?.UtcDateTime.Date;
+    public DateTime? DiaryDate => (CreatedAt ?? UpdatedAt) is { } written
+        ? TimeZoneInfo.ConvertTimeFromUtc(written.UtcDateTime, DiaryTimeZone).Date
+        : null;
 
     /// <summary>Most recent write JE recorded — the no-backfill cutoff compares against this.</summary>
     public DateTimeOffset? LastWriteUtc => UpdatedAt ?? CreatedAt;

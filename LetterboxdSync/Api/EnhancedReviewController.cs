@@ -48,6 +48,14 @@ public sealed class EnhancedReviewStatus
     public int StoreEntries { get; set; }
 
     /// <summary>
+    /// The zone diary dates are computed in, and its current offset. Exposed because a wrong zone
+    /// dates entries to the wrong day silently — nothing in the plugin's own output shows it until
+    /// the entry is on Letterboxd.
+    /// </summary>
+    public string DiaryTimeZone { get; set; } = string.Empty;
+    public int DiaryTimeZoneOffsetMinutes { get; set; }
+
+    /// <summary>
     /// Entries a run will not even look at, because they were written before the no-backfill
     /// cutoff. With backfill off these are the reviews that exist on the server but are being
     /// deliberately left alone — the number that would post the moment backfill is switched on.
@@ -116,6 +124,7 @@ public class EnhancedReviewController : ControllerBase
         // which reads as "this is about to post 68 reviews" when it is not.
         var backfill = config?.EnhancedReviewSyncBackfill ?? true;
         var since = EnhancedReviewSyncState.SinceUtcOrNull();
+        var zone = EnhancedReviewEntry.DiaryTimeZone;
         var inScope = load.Entries
             .Where(e => EnhancedReviewSyncRunner.IsInScope(e, backfill, since))
             .ToList();
@@ -130,6 +139,8 @@ public class EnhancedReviewController : ControllerBase
             StoreReadable = load.StoreReadable,
             StoreError = load.Error,
             StoreEntries = load.Entries.Count,
+            DiaryTimeZone = zone.Id,
+            DiaryTimeZoneOffsetMinutes = (int)zone.GetUtcOffset(DateTime.UtcNow).TotalMinutes,
             OutOfScope = load.Entries.Count - inScope.Count,
             SinceUtc = since,
             Pending = inScope.Count(e => EnhancedReviewSyncState.ShouldAttempt(

@@ -49,6 +49,7 @@ public class EnhancedReviewControllerTests : IDisposable
         EnhancedReviewSyncState.ResetForTesting();
         EnhancedReviewSyncRunner.ConfigurationOverrideForTesting = () => _config;
         EnhancedReviewSyncRunner.ResetLastRunForTesting();
+        EnhancedReviewEntry.DiaryTimeZoneOverrideForTesting = EnhancedReviewUnitTests.UtcPlus8;
         EnhancedReviewSyncRunner.LetterboxdFactoryForTesting = (_, _, _, _, _) =>
             Task.FromResult<ILetterboxdService>(new NoopLetterboxdService());
 
@@ -66,6 +67,7 @@ public class EnhancedReviewControllerTests : IDisposable
         EnhancedReviewSyncState.ResetForTesting();
         EnhancedReviewSyncRunner.ConfigurationOverrideForTesting = null;
         EnhancedReviewSyncRunner.ResetLastRunForTesting();
+        EnhancedReviewEntry.DiaryTimeZoneOverrideForTesting = null;
         EnhancedReviewSyncRunner.LetterboxdFactoryForTesting = null;
         try { Directory.Delete(_tempDir, recursive: true); } catch { }
     }
@@ -171,7 +173,8 @@ public class EnhancedReviewControllerTests : IDisposable
         foreach (var expected in new[]
                  {
                      "Enabled", "Backfill", "MaxAttempts", "StorePath", "StorePresent", "StoreReadable",
-                     "StoreError", "StoreEntries", "OutOfScope", "SinceUtc", "Pending", "Synced", "Skipped", "Failed",
+                     "StoreError", "StoreEntries", "DiaryTimeZone", "DiaryTimeZoneOffsetMinutes",
+                     "OutOfScope", "SinceUtc", "Pending", "Synced", "Skipped", "Failed",
                      "IsRunning", "LastRunCompletedUtc", "LastRun", "LastRunErrors", "Entries"
                  })
         {
@@ -235,6 +238,19 @@ public class EnhancedReviewControllerTests : IDisposable
         Assert.Equal(0, status.OutOfScope);
         Assert.Equal(2, status.Pending);
         Assert.Equal(new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero), status.SinceUtc);
+    }
+
+    [Fact]
+    public void Status_ReportsTheZoneDiaryDatesAreComputedIn()
+    {
+        _config.EnhancedReviewSyncEnabled = true;
+
+        var status = Status();
+
+        // A diary date is a local-calendar concept. If this reports the wrong zone, entries land on
+        // the wrong day and nothing else in the plugin's own output would show it.
+        Assert.Equal(EnhancedReviewUnitTests.UtcPlus8.Id, status.DiaryTimeZone);
+        Assert.Equal(480, status.DiaryTimeZoneOffsetMinutes);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────────

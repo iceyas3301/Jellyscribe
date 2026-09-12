@@ -104,7 +104,8 @@ This fork is installed manually.
 
 ## Staying in sync with upstream
 
-`~/bin/jellyscribe-fork-sync.sh` runs every two weeks from a Linux cron entry on the host. Gates, in order:
+`~/bin/jellyscribe-fork-sync.sh` runs every two weeks from a Linux cron entry on the host.
+Gates, in order:
 
 1. working tree clean
 2. upstream has new commits (otherwise a cheap no-op)
@@ -130,9 +131,9 @@ dotnet test  -c Release                       # full upstream suite + the Enhanc
 dotnet test  -c Release --filter "FullyQualifiedName~Enhanced"
 ```
 
-The feature's own tests live in `LetterboxdSync.Tests/Enhanced/` (68 tests): key parsing, rating
-mapping, tolerant store reads, dedupe/retry semantics, routing by scope, the per-user privacy
-boundary, and the admin endpoints.
+The feature's own tests live in `LetterboxdSync.Tests/Enhanced/` (75 tests): key parsing, rating
+mapping, diary-date timezone handling, tolerant store reads, dedupe/retry semantics, routing by
+scope, the per-user privacy boundary, and the admin endpoints.
 
 If a review needs re-posting, delete its entry from
 `<config>/plugins/configurations/jellyscribe-enhanced-review-state.json` (or the whole file to
