@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using LetterboxdSync;
 using LetterboxdSync.Api;
@@ -154,6 +155,28 @@ public class EnhancedReviewControllerTests : IDisposable
 
         Assert.NotNull(EnhancedReviewSyncRunner.LastRun);
         Assert.Equal(1, EnhancedReviewSyncRunner.LastRun!.Posted);
+    }
+
+    [Fact]
+    public void StatusPayload_UsesThePropertyNamesTheDashboardReads()
+    {
+        // configPage.html's loadEnhancedReviewStatus reads these names verbatim, and Jellyfin's
+        // MVC pipeline does not camel-case this model. A rename, or a naming policy added later,
+        // would silently blank the dashboard panel — so assert the wire contract, not just the
+        // C# property names.
+        var json = JsonSerializer.Serialize(Status());
+        using var doc = JsonDocument.Parse(json);
+        var names = doc.RootElement.EnumerateObject().Select(p => p.Name).ToList();
+
+        foreach (var expected in new[]
+                 {
+                     "Enabled", "Backfill", "MaxAttempts", "StorePath", "StorePresent", "StoreReadable",
+                     "StoreError", "StoreEntries", "Pending", "Synced", "Skipped", "Failed",
+                     "IsRunning", "LastRunCompletedUtc", "LastRun", "LastRunErrors", "Entries"
+                 })
+        {
+            Assert.Contains(expected, names);
+        }
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────────

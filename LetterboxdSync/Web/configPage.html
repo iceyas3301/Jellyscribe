@@ -956,12 +956,12 @@
                             var el = document.getElementById('enhancedReviewStatus');
                             ApiClient.getJSON(ApiClient.getUrl('Jellyfin.Plugin.LetterboxdSync/EnhancedReviews/Status')).then(function (s) {
                                 var bits = [];
-                                if (!s.storePresent) {
+                                if (!s.StorePresent) {
                                     bits.push('no Jellyfin Enhanced review store found');
                                 } else {
-                                    bits.push(s.storeEntries + ' review(s): ' + s.pending + ' pending, ' + s.synced + ' synced, ' + s.skipped + ' skipped, ' + s.failed + ' failed');
+                                    bits.push(s.StoreEntries + ' review(s): ' + s.Pending + ' pending, ' + s.Synced + ' synced, ' + s.Skipped + ' skipped, ' + s.Failed + ' failed');
                                 }
-                                if (s.lastRun) bits.push('last run: ' + s.lastRun);
+                                if (s.LastRun) bits.push('last run: ' + s.LastRun);
                                 el.textContent = bits.join(' · ');
                             }).catch(function () { el.textContent = ''; });
                         },
