@@ -49,6 +49,20 @@ public class ScrapingLetterboxdService : ILetterboxdService
     public Task<List<DiaryFilmEntry>> GetDiaryFilmEntriesAsync(string username)
         => _scraper.GetDiaryFilmEntriesAsync(username);
 
+    /// <summary>
+    /// The scraping path has no entry identifiers to work with: the film's diary page shows
+    /// dates and ratings but not the ids needed to edit an entry. Callers fall back to posting
+    /// only when the date is not already on the diary (see the Enhanced review runner).
+    /// </summary>
+    public bool SupportsLogEntryEditing => false;
+
+    public Task<string?> FindLogEntryIdAsync(string filmIdOrSlug, DateTime date)
+        => Task.FromResult<string?>(null);
+
+    public Task UpdateLogEntryAsync(string logEntryId, string? reviewText, bool containsSpoilers, double? rating)
+        => throw new NotSupportedException(
+            "The scraping Letterboxd service cannot edit existing log entries.");
+
     public void Dispose()
     {
         _http.Dispose();

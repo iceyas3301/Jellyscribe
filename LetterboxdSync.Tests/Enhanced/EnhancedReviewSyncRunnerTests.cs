@@ -7,7 +7,11 @@ using LetterboxdSync;
 using LetterboxdSync.Configuration;
 using LetterboxdSync.Enhanced;
 using LetterboxdSync.Serializd;
+using Jellyfin.Database.Implementations.Entities;
+using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using Xunit;
@@ -437,6 +441,89 @@ public class EnhancedReviewSyncRunnerTests : IDisposable
         Assert.Single(_letterboxd.Posts);
     }
 
+    [Fact]
+    public async Task Review_ForAFilmAlreadyOnTheDiary_AttachesInsteadOfPostingASecondEntry()
+    {
+        AddLetterboxdAccount(UserN, "sample-user");
+        WriteStore(Entry($"{UserN}:movie:278", UserN, "278", "movie", "Classic", 5, "2026-07-16T01:50:06.0000000Z"));
+
+        // The film is already on the diary for the day the review carries.
+        _letterboxd.ExistingEntries[new DateTime(2026, 7, 16)] = "entry-1";
+
+        var summary = await _runner.RunAsync();
+
+        Assert.Equal(1, summary.Attached);
+        Assert.Equal(0, summary.Posted);
+        Assert.Empty(_letterboxd.Posts);                 // no second diary entry
+        var update = Assert.Single(_letterboxd.Updates);
+        Assert.Equal("entry-1", update.EntryId);
+        Assert.Equal("Classic", update.Text);
+        Assert.Equal(5, update.Rating);
+        Assert.Equal(EnhancedReviewSyncState.SyncedStatus,
+            EnhancedReviewSyncState.Get($"{UserN}:movie:278")!.Status);
+    }
+
+    [Fact]
+    public async Task Review_ForAFilmNotOnTheDiary_StillCreatesAnEntry()
+    {
+        AddLetterboxdAccount(UserN, "sample-user");
+        WriteStore(Entry($"{UserN}:movie:278", UserN, "278", "movie", "Classic", 5, "2026-07-16T01:50:06.0000000Z"));
+
+        var summary = await _runner.RunAsync();
+
+        Assert.Equal(1, summary.Posted);
+        Assert.Equal(0, summary.Attached);
+        Assert.Empty(_letterboxd.Updates);
+        Assert.Equal("2026-07-16", Assert.Single(_letterboxd.Posts).Date);
+    }
+
+    [Fact]
+    public async Task DiaryDate_PrefersTheJellyfinWatchDateOverTheDateTheReviewWasWritten()
+    {
+        AddLetterboxdAccount(UserN, "sample-user");
+        WriteStore(Entry($"{UserN}:movie:278", UserN, "278", "movie", "Classic", 5, "2026-07-16T01:50:06.0000000Z"));
+
+        // Watched on the 22nd, reviewed on the 16th: the diary entry belongs on the 22nd, or the
+        // review lands on its own day and the film reads as watched twice.
+        var summary = await RunnerWithWatchDate(278, new DateTime(2026, 7, 22)).RunAsync();
+
+        Assert.Equal(1, summary.Posted);
+        Assert.Equal("2026-07-22", Assert.Single(_letterboxd.Posts).Date);
+    }
+
+    [Fact]
+    public async Task WatchDate_ThatIsAlreadyOnTheDiary_AttachesToThatViewing()
+    {
+        AddLetterboxdAccount(UserN, "sample-user");
+        WriteStore(Entry($"{UserN}:movie:278", UserN, "278", "movie", "Classic", 5, "2026-07-16T01:50:06.0000000Z"));
+        _letterboxd.ExistingEntries[new DateTime(2026, 7, 22)] = "entry-22";
+
+        var summary = await RunnerWithWatchDate(278, new DateTime(2026, 7, 22)).RunAsync();
+
+        Assert.Equal(1, summary.Attached);
+        Assert.Equal("entry-22", Assert.Single(_letterboxd.Updates).EntryId);
+    }
+
+    [Fact]
+    public async Task ServiceThatCannotEditEntries_SkipsRatherThanLoggingTheFilmTwice()
+    {
+        AddLetterboxdAccount(UserN, "sample-user");
+        WriteStore(Entry($"{UserN}:movie:278", UserN, "278", "movie", "Classic", 5, "2026-07-16T01:50:06.0000000Z"));
+
+        // The scraping fallback can't edit an entry, but it can see the date is already logged.
+        _letterboxd.SupportsLogEntryEditing = false;
+        _letterboxd.DiaryInfoResult = new DiaryInfo(new DateTime(2026, 7, 16), true);
+
+        var summary = await _runner.RunAsync();
+
+        Assert.Equal(1, summary.AlreadyLogged);
+        Assert.Equal(0, summary.Posted);
+        Assert.Empty(_letterboxd.Posts);
+        Assert.Empty(_letterboxd.Updates);
+        Assert.Equal(EnhancedReviewSyncState.SkippedStatus,
+            EnhancedReviewSyncState.Get($"{UserN}:movie:278")!.Status);
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────────
 
     private void AddLetterboxdAccount(string userId, string username, bool enabled = true)
@@ -460,12 +547,40 @@ public class EnhancedReviewSyncRunnerTests : IDisposable
     private void WriteStore(params string[] entries)
         => File.WriteAllText(_storePath, EnhancedReviewUnitTests.JeStore(entries));
 
+    /// <summary>
+    /// A runner that can see Jellyfin watch dates: one played movie with the given TMDb id,
+    /// watched on the given date. Everything else about the run is unchanged.
+    /// </summary>
+    private EnhancedReviewSyncRunner RunnerWithWatchDate(int tmdbId, DateTime watchDate)
+    {
+        var user = new User("sample-user", "test-provider-id", "test-reset-id");
+
+        var movie = new Movie { Name = $"movie-{tmdbId}" };
+        movie.SetProviderId(MetadataProvider.Tmdb, tmdbId.ToString(CultureInfo.InvariantCulture));
+
+        var userManager = Substitute.For<IUserManager>();
+        userManager.GetUserById(Arg.Any<Guid>()).Returns(user);
+
+        var library = Substitute.For<ILibraryManager>();
+        library.GetItemList(Arg.Any<MediaBrowser.Controller.Entities.InternalItemsQuery>())
+            .Returns(new List<BaseItem> { movie });
+
+        var userData = Substitute.For<IUserDataManager>();
+        userData.GetUserData(Arg.Any<User>(), Arg.Any<BaseItem>())
+            .Returns(new UserItemData { Key = $"test-{tmdbId}", LastPlayedDate = watchDate });
+
+        return new EnhancedReviewSyncRunner(
+            NullLogger<EnhancedReviewSyncRunner>.Instance, userManager, library, userData);
+    }
+
     private static string Entry(
         string key, string userId, string tmdbId, string mediaType, string content, double? rating,
         string created, string updated = "")
         => EnhancedReviewUnitTests.JeEntry(key, userId, tmdbId, mediaType, content, rating, created, updated);
 
     internal sealed record PostedReview(string Slug, string? Text, double? Rating, string? Date, int? TmdbId);
+
+    internal sealed record UpdatedLogEntry(string EntryId, string? Text, double? Rating, bool ContainsSpoilers);
 
     internal sealed record PostedShowReview(int TmdbId, int? Rating, string? Text, bool ContainsSpoiler);
 
@@ -475,6 +590,18 @@ public class EnhancedReviewSyncRunnerTests : IDisposable
     internal sealed class FakeLetterboxdService : ILetterboxdService
     {
         public List<PostedReview> Posts { get; } = new();
+
+        /// <summary>Edits made to existing diary entries, in call order.</summary>
+        public List<UpdatedLogEntry> Updates { get; } = new();
+
+        /// <summary>Entry ids the fake reports as already on the diary, keyed by diary date.</summary>
+        public Dictionary<DateTime, string> ExistingEntries { get; } = new();
+
+        /// <summary>What GetDiaryInfoAsync reports — used by the can't-edit fallback path.</summary>
+        public DiaryInfo DiaryInfoResult { get; set; } = new(null, false);
+
+        /// <summary>The API client can edit; the scraping fallback cannot.</summary>
+        public bool SupportsLogEntryEditing { get; set; } = true;
 
         /// <summary>Every call to PostReviewAsync, including ones that were made to throw —
         /// the retry-budget tests need attempts, not just successes.</summary>
@@ -492,7 +619,7 @@ public class EnhancedReviewSyncRunnerTests : IDisposable
             => Task.FromResult(new FilmResult($"film-{tmdbId}", $"filmId-{tmdbId}", null));
 
         public Task<DiaryInfo> GetDiaryInfoAsync(string filmIdOrSlug, string username)
-            => Task.FromResult<DiaryInfo>(null!);
+            => Task.FromResult(DiaryInfoResult);
 
         public Task MarkAsWatchedAsync(string filmSlug, string filmId, DateTime? date, bool liked,
             string? productionId = null, bool rewatch = false, double? rating = null)
@@ -508,6 +635,15 @@ public class EnhancedReviewSyncRunnerTests : IDisposable
                 throw new Exception("simulated per-account failure");
 
             Posts.Add(new PostedReview(filmSlug, reviewText, rating, date, tmdbId));
+            return Task.CompletedTask;
+        }
+
+        public Task<string?> FindLogEntryIdAsync(string filmIdOrSlug, DateTime date)
+            => Task.FromResult(ExistingEntries.TryGetValue(date.Date, out var id) ? id : null);
+
+        public Task UpdateLogEntryAsync(string logEntryId, string? reviewText, bool containsSpoilers, double? rating)
+        {
+            Updates.Add(new UpdatedLogEntry(logEntryId, reviewText, rating, containsSpoilers));
             return Task.CompletedTask;
         }
 

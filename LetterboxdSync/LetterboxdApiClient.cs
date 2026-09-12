@@ -131,6 +131,112 @@ public class LetterboxdApiClient : ILetterboxdService
         return new DiaryInfo(lastDate, true);
     }
 
+    public bool SupportsLogEntryEditing => true;
+
+    public async Task<string?> FindLogEntryIdAsync(string filmIdOrSlug, DateTime date)
+    {
+        EnsureAuthenticated();
+
+        // The collection endpoint is the only way to reach entries with their ids; the single
+        // /log-entry/{id} route needs an id we do not have yet.
+        var response = await SendSignedAsync(HttpMethod.Get, "/log-entries",
+            queryParams: $"member={Uri.EscapeDataString(_memberId)}&film={Uri.EscapeDataString(filmIdOrSlug)}&perPage=50",
+            authenticated: true).ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            _logger.LogWarning("Could not list Letterboxd log entries for {Film}: {Status}",
+                filmIdOrSlug, response.StatusCode);
+            return null;
+        }
+
+        var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+        using var doc = JsonDocument.Parse(json);
+        if (!doc.RootElement.TryGetProperty("items", out var items)) return null;
+
+        foreach (var item in items.EnumerateArray())
+        {
+            if (!item.TryGetProperty("id", out var idEl)) continue;
+            var entryId = idEl.GetString();
+            if (string.IsNullOrEmpty(entryId)) continue;
+
+            if (!item.TryGetProperty("diaryDetails", out var details)) continue;
+            if (!details.TryGetProperty("diaryDate", out var dateEl)) continue;
+
+            if (DateTime.TryParse(dateEl.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed)
+                && parsed.Date == date.Date)
+            {
+                return entryId;
+            }
+        }
+
+        return null;
+    }
+
+    public async Task UpdateLogEntryAsync(string logEntryId, string? reviewText, bool containsSpoilers, double? rating)
+    {
+        EnsureAuthenticated();
+
+        // Partial update: the API only requires the parameters being changed, and omitting
+        // diaryDetails leaves the entry's date and diary membership untouched.
+        var payload = new Dictionary<string, object?>();
+        if (rating.HasValue && rating.Value > 0) payload["rating"] = rating.Value;
+        if (!string.IsNullOrWhiteSpace(reviewText))
+            payload["review"] = new Dictionary<string, object>
+            {
+                ["text"] = reviewText,
+                ["containsSpoilers"] = containsSpoilers
+            };
+
+        if (payload.Count == 0) return;
+
+        var body = JsonSerializer.Serialize(payload);
+        var response = await SendSignedAsync(HttpMethod.Patch,
+            $"/log-entry/{Uri.EscapeDataString(logEntryId)}", body, "application/json",
+            authenticated: true).ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var (code, message) = await ReadUpdateMessagesAsync(response).ConfigureAwait(false);
+            var detail = code != null || message != null
+                ? $": {code ?? "?"} {message}".TrimEnd()
+                : string.Empty;
+            throw new Exception(
+                $"Letterboxd rejected the log-entry update ({response.StatusCode}){detail}");
+        }
+
+        _logger.LogInformation("Updated Letterboxd log entry {EntryId} in place", logEntryId);
+    }
+
+    /// <summary>
+    /// Pulls the machine-readable error codes out of a failed update response. Deliberately does
+    /// not surface the body: an update that carried review text can echo it back.
+    /// </summary>
+    private static async Task<(string? Code, string? Message)> ReadUpdateMessagesAsync(HttpResponseMessage response)
+    {
+        try
+        {
+            var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("messages", out var messages)
+                && messages.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var message in messages.EnumerateArray())
+                {
+                    var code = message.TryGetProperty("code", out var c) ? c.GetString() : null;
+                    var title = message.TryGetProperty("title", out var t) ? t.GetString() : null;
+                    if (code != null || title != null) return (code, title);
+                }
+            }
+        }
+        catch
+        {
+            // The status code alone is still actionable.
+        }
+
+        return (null, null);
+    }
+
     public async Task MarkAsWatchedAsync(string filmSlug, string filmId, DateTime? date, bool liked,
         string? productionId = null, bool rewatch = false, double? rating = null)
     {

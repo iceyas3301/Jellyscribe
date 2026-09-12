@@ -31,7 +31,7 @@ it existed on the Jellyfin side and nowhere else. On this server that was 78 rev
 | `EnhancedReviewEntry.cs` | The review payload plus the rating/date mapping to both services. |
 | `EnhancedReviewStore.cs` | Read-only, tolerant reader for JE's `reviews.json`. |
 | `EnhancedReviewSyncState.cs` | Fingerprint-based dedupe + outcome memory (never stores review text). |
-| `EnhancedReviewSyncRunner.cs` | The sync pass: read store → resolve the author's own accounts → post. |
+| `EnhancedReviewSyncRunner.cs` | The sync pass: read store → resolve the author's own accounts → attach to an existing diary entry or post. |
 | `EnhancedReviewSyncTask.cs` | Jellyfin scheduled task, every 15 minutes by default. |
 | `Api/EnhancedReviewController.cs` | Admin `Status` + `SyncNow` endpoints. |
 
@@ -41,7 +41,18 @@ reviews** panel on the plugin's Integrations tab.
 ### Behaviour
 
 - **Films → Letterboxd.** Posted through the same service Jellyscribe already uses, so the official
-  API path is preferred and the scraping fallback applies. Dated to when the review was written.
+  API path is preferred and the scraping fallback applies.
+- **Entries are dated to the watch, not the review.** The date comes from Jellyfin's
+  `LastPlayedDate` for the film, falling back to when JE recorded the review being written (which is
+  the only option for a film with no recorded play). Dating by the write time instead would put the
+  review on a different day than the viewing the playback sync already logged, and the film would
+  read as watched twice. JE's write dates are also unreliable in bulk: a batch of imported reviews
+  all carry the day JE started storing them.
+- **An existing diary entry is edited, not duplicated.** Letterboxd's `POST /log-entries` never
+  reconciles with an entry that is already there — posting a review for a film already logged on that
+  date adds a *second* entry. So before posting, the sync looks for the member's own log entry for
+  that film and date and, when it finds one, edits it in place (`PATCH /log-entry/{id}`) with the
+  rating and review text. Counted separately as **attached** in the run summary and the activity feed.
 - **TV shows and episodes → Serializd.** A show-level entry posts a show review; `…:s1:e2` posts an
   episode review. Ratings map JE's 1–5 stars to Serializd's 1–10.
 - **Season-only entries are skipped** (`…:s1` with no episode). Serializd's API has no season-level
@@ -72,6 +83,10 @@ reviews** panel on the plugin's Integrations tab.
   Letterboxd with `containsSpoilers: false`.
 - **Serializd entries are not backdated.** Serializd's show/episode review endpoint takes no date,
   so a backfilled Serializd entry lands on the run date. Letterboxd entries are dated correctly.
+- **The scraping fallback cannot edit entries.** The film's diary page exposes dates but not the log
+  entry ids an edit needs, so on that path a review whose date is already on the diary is **skipped**
+  (matching the playback sync's own duplicate guard) rather than posted and duplicated. Counted as
+  `alreadyLogged` in the run summary. Nothing is lost: the entry for that viewing is already there.
 - **Activity rows use `TMDb <id>` as the title.** JE's store carries no title, and resolving one per
   entry would mean querying the library for every synced review. Rows are tagged with source
   `enhanced-review`.
@@ -131,9 +146,10 @@ dotnet test  -c Release                       # full upstream suite + the Enhanc
 dotnet test  -c Release --filter "FullyQualifiedName~Enhanced"
 ```
 
-The feature's own tests live in `LetterboxdSync.Tests/Enhanced/` (75 tests): key parsing, rating
-mapping, diary-date timezone handling, tolerant store reads, dedupe/retry semantics, routing by
-scope, the per-user privacy boundary, and the admin endpoints.
+The feature's own tests live in `LetterboxdSync.Tests/Enhanced/` (80 tests): key parsing, rating
+mapping, diary-date timezone handling, attaching to an existing diary entry versus posting a new one,
+watch dates taking precedence over write dates, tolerant store reads, dedupe/retry semantics, routing
+by scope, the per-user privacy boundary, and the admin endpoints.
 
 If a review needs re-posting, delete its entry from
 `<config>/plugins/configurations/jellyscribe-enhanced-review-state.json` (or the whole file to

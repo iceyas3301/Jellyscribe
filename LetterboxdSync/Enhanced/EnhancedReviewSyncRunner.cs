@@ -5,7 +5,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using LetterboxdSync.Configuration;
 using LetterboxdSync.Serializd;
+using Jellyfin.Data.Enums;
+using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Logging;
 
 namespace LetterboxdSync.Enhanced;
@@ -22,8 +25,22 @@ public sealed class EnhancedReviewSyncSummary
     /// <summary>Entries in JE's store that this run was responsible for (after the cutoff).</summary>
     public int Considered { get; set; }
 
-    /// <summary>Entries posted to at least one linked account.</summary>
+    /// <summary>Entries that created a new diary entry on at least one account.</summary>
     public int Posted { get; set; }
+
+    /// <summary>
+    /// Entries edited into a viewing the film already had on the diary, so no second entry was
+    /// created. Letterboxd's POST never merges: posting a review for a film already logged on
+    /// that date adds a duplicate, which is why attaching exists.
+    /// </summary>
+    public int Attached { get; set; }
+
+    /// <summary>
+    /// Entries left alone because the film is already on the diary for that date and the active
+    /// Letterboxd service cannot edit entries (the scraping fallback). Skipped rather than
+    /// duplicated, matching the playback sync's own duplicate guard.
+    /// </summary>
+    public int AlreadyLogged { get; set; }
 
     /// <summary>Entries where every linked account rejected the post.</summary>
     public int Failed { get; set; }
@@ -44,8 +61,9 @@ public sealed class EnhancedReviewSyncSummary
     public List<string> Errors { get; } = new();
 
     public string Describe() =>
-        $"considered={Considered} posted={Posted} failed={Failed} skipped={Skipped} " +
-        $"upToDate={UpToDate} awaitingAccount={AwaitingAccount} in {Duration.TotalSeconds:0.0}s";
+        $"considered={Considered} posted={Posted} attached={Attached} failed={Failed} skipped={Skipped} " +
+        $"alreadyLogged={AlreadyLogged} upToDate={UpToDate} awaitingAccount={AwaitingAccount} " +
+        $"in {Duration.TotalSeconds:0.0}s";
 }
 
 /// <summary>
@@ -65,6 +83,26 @@ public sealed class EnhancedReviewSyncRunner
     /// <summary>Source stamped on every SyncEvent this runner writes, so the activity feed and
     /// stats can attribute these rows to the JE integration rather than a playback sync.</summary>
     public const string SyncEventSource = "enhanced-review";
+
+    /// <summary>Reason recorded when a review is left alone because its film is already on the
+    /// diary for that date and the active Letterboxd service can't edit entries.</summary>
+    internal const string AlreadyOnDiaryReason = "already-on-diary";
+
+    /// <summary>How one entry ended up, for the summary counters and the activity feed.</summary>
+    private enum EntryOutcome
+    {
+        /// <summary>A new diary entry was created.</summary>
+        Posted,
+
+        /// <summary>The review was edited into a viewing the film already had on the diary.</summary>
+        Attached,
+
+        /// <summary>The film is already on the diary for that date and this service can't edit.</summary>
+        AlreadyLogged,
+
+        /// <summary>Every linked account rejected the write.</summary>
+        Failed
+    }
 
     /// <summary>
     /// Serialises runs against each other (scheduled task + manual button).
@@ -122,11 +160,31 @@ public sealed class EnhancedReviewSyncRunner
 
     private readonly ILogger<EnhancedReviewSyncRunner> _logger;
     private readonly IUserManager _userManager;
+    private readonly ILibraryManager? _libraryManager;
+    private readonly IUserDataManager? _userDataManager;
 
-    public EnhancedReviewSyncRunner(ILogger<EnhancedReviewSyncRunner> logger, IUserManager userManager)
+    /// <summary>
+    /// Jellyfin watch dates per JE user id, keyed by TMDb id, built once per run. Reviews are
+    /// dated to the viewing the diary already knows about, so a review attaches to that entry
+    /// instead of landing on its own day.
+    /// </summary>
+    private readonly Dictionary<string, Dictionary<int, DateTime>> _watchDates = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The library and user-data managers are optional so existing construction sites (and tests
+    /// that don't care about watch dates) keep working; without them entries fall back to the
+    /// date JE recorded the review being written.
+    /// </summary>
+    public EnhancedReviewSyncRunner(
+        ILogger<EnhancedReviewSyncRunner> logger,
+        IUserManager userManager,
+        ILibraryManager? libraryManager = null,
+        IUserDataManager? userDataManager = null)
     {
         _logger = logger;
         _userManager = userManager;
+        _libraryManager = libraryManager;
+        _userDataManager = userDataManager;
         EnhancedReviewSyncState.SetLogger(logger);
     }
 
@@ -171,6 +229,10 @@ public sealed class EnhancedReviewSyncRunner
 
         try
         {
+            // Watch dates are cached per run: the library can change between runs (a rewatch
+            // moves LastPlayedDate), and a stale map would aim reviews at the wrong day.
+            _watchDates.Clear();
+
             var load = EnhancedReviewStore.Load(config.EnhancedReviewsPath, _logger);
             summary.StorePresent = load.StorePresent;
             summary.StorePath = load.Path;
@@ -281,8 +343,8 @@ public sealed class EnhancedReviewSyncRunner
                 return;
             }
 
-            var posted = await PostToLetterboxdAsync(entry, accounts, summary).ConfigureAwait(false);
-            RecordOutcome(entry, posted, summary, username, title, "letterboxd");
+            var outcome = await PostToLetterboxdAsync(entry, accounts, summary).ConfigureAwait(false);
+            RecordOutcome(entry, outcome, summary, username, title, "letterboxd");
             return;
         }
 
@@ -294,16 +356,20 @@ public sealed class EnhancedReviewSyncRunner
         }
 
         var postedTv = await PostToSerializdAsync(entry, serializdAccounts, summary).ConfigureAwait(false);
-        RecordOutcome(entry, postedTv, summary, username, title, "serializd");
+        RecordOutcome(entry,
+            postedTv ? EntryOutcome.Posted : EntryOutcome.Failed, summary, username, title, "serializd");
     }
 
-    private async Task<bool> PostToLetterboxdAsync(
+    private async Task<EntryOutcome> PostToLetterboxdAsync(
         EnhancedReviewEntry entry,
         List<Account> accounts,
         EnhancedReviewSyncSummary summary)
     {
         var key = entry.Key;
-        var anySuccess = false;
+        var diaryDate = ResolveDiaryDate(entry);
+        var anyPosted = false;
+        var anyAttached = false;
+        var anyAlreadyLogged = false;
         Exception? lastError = null;
 
         foreach (var account in accounts)
@@ -318,20 +384,61 @@ public sealed class EnhancedReviewSyncRunner
                 // fallback posts by slug — resolve once here so both paths work.
                 var film = await service.LookupFilmByTmdbIdAsync(key.TmdbId).ConfigureAwait(false);
 
+                var existingEntryId = service.SupportsLogEntryEditing
+                    ? await service.FindLogEntryIdAsync(film.FilmId, diaryDate).ConfigureAwait(false)
+                    : null;
+
+                if (existingEntryId != null)
+                {
+                    // The film is already on the diary for this date, so edit that entry instead of
+                    // logging the film again — Letterboxd's POST adds a second entry, it never
+                    // merges with the existing one.
+                    await service.UpdateLogEntryAsync(
+                        existingEntryId,
+                        entry.HasText ? entry.Content : null,
+                        containsSpoilers: false,
+                        entry.LetterboxdRating).ConfigureAwait(false);
+
+                    anyAttached = true;
+                    _logger.LogInformation(
+                        "Enhanced review attached to an existing Letterboxd diary entry: tmdb={TmdbId} " +
+                        "entry={EntryId} as={LetterboxdUsername} hasText={HasText} rating={Rating} date={Date}",
+                        key.TmdbId, existingEntryId, account.LetterboxdUsername, entry.HasText,
+                        entry.LetterboxdRating, diaryDate);
+                    continue;
+                }
+
+                if (!service.SupportsLogEntryEditing)
+                {
+                    // No way to edit, so apply the same duplicate guard the playback sync uses:
+                    // post only when this date is not already on the film's diary.
+                    var diaryInfo = await service.GetDiaryInfoAsync(film.Slug, account.LetterboxdUsername)
+                        .ConfigureAwait(false);
+                    if (Helpers.IsDuplicate(diaryInfo.LastDate, diaryDate))
+                    {
+                        anyAlreadyLogged = true;
+                        _logger.LogInformation(
+                            "Enhanced review for tmdb={TmdbId} left alone: already on the Letterboxd diary " +
+                            "for {Date} and this Letterboxd service cannot edit entries",
+                            key.TmdbId, diaryDate.ToString("yyyy-MM-dd"));
+                        continue;
+                    }
+                }
+
                 await service.PostReviewAsync(
                     film.Slug,
                     entry.HasText ? entry.Content : null,
                     containsSpoilers: false,
                     isRewatch: false,
-                    date: entry.DiaryDate?.ToString("yyyy-MM-dd"),
+                    date: diaryDate.ToString("yyyy-MM-dd"),
                     rating: entry.LetterboxdRating,
                     tmdbId: key.TmdbId).ConfigureAwait(false);
 
-                anySuccess = true;
+                anyPosted = true;
                 _logger.LogInformation(
                     "Enhanced review posted to Letterboxd: tmdb={TmdbId} as={LetterboxdUsername} " +
                     "hasText={HasText} rating={Rating} date={Date}",
-                    key.TmdbId, account.LetterboxdUsername, entry.HasText, entry.LetterboxdRating, entry.DiaryDate);
+                    key.TmdbId, account.LetterboxdUsername, entry.HasText, entry.LetterboxdRating, diaryDate);
             }
             catch (Exception ex)
             {
@@ -342,10 +449,78 @@ public sealed class EnhancedReviewSyncRunner
             }
         }
 
-        if (!anySuccess && lastError != null)
+        if (anyPosted) return EntryOutcome.Posted;
+        if (anyAttached) return EntryOutcome.Attached;
+        if (anyAlreadyLogged) return EntryOutcome.AlreadyLogged;
+
+        if (lastError != null)
             summary.Errors.Add($"letterboxd tmdb={key.TmdbId}: {lastError.Message}");
 
-        return anySuccess;
+        return EntryOutcome.Failed;
+    }
+
+    /// <summary>
+    /// The date a review's diary entry should carry: the film's Jellyfin watch date when there is
+    /// one, otherwise the date JE recorded the review being written.
+    ///
+    /// The watch date is the one that matters, because the playback sync logs viewings with it.
+    /// Dating by the write time instead puts a review on a different day than the viewing it
+    /// belongs to, which shows as the same watch twice — and JE's write dates are not even
+    /// reliable, since a batch of imported reviews all carry the day JE started storing them.
+    /// </summary>
+    private DateTime ResolveDiaryDate(EnhancedReviewEntry entry)
+        => GetWatchDates(entry.Key.UserIdN).TryGetValue(entry.Key.TmdbId, out var watchDate)
+            ? watchDate
+            : entry.DiaryDate ?? DateTime.Now.Date;
+
+    /// <summary>
+    /// Jellyfin watch dates for one user, keyed by TMDb id, resolved once per run. Empty when the
+    /// library can't answer, in which case reviews fall back to the JE write date.
+    /// </summary>
+    private Dictionary<int, DateTime> GetWatchDates(string userIdN)
+    {
+        if (_watchDates.TryGetValue(userIdN, out var cached)) return cached;
+
+        var map = new Dictionary<int, DateTime>();
+
+        try
+        {
+            if (_libraryManager != null && _userDataManager != null
+                && Guid.TryParseExact(userIdN, "N", out var userGuid))
+            {
+                var user = _userManager.GetUserById(userGuid);
+                if (user != null)
+                {
+                    var items = _libraryManager.GetItemList(new InternalItemsQuery(user)
+                    {
+                        IncludeItemTypes = new[] { BaseItemKind.Movie },
+                        IsVirtualItem = false,
+                    });
+
+                    foreach (var item in items)
+                    {
+                        if (!int.TryParse(item.GetProviderId(MetadataProvider.Tmdb), out var tmdbId)) continue;
+
+                        var played = _userDataManager.GetUserData(user, item)?.LastPlayedDate;
+                        if (!Helpers.HasPlausibleWatchDate(played)) continue;
+
+                        // The latest play is the one the playback sync would log, so a rewatch
+                        // doesn't strand the review on the older viewing.
+                        if (!map.TryGetValue(tmdbId, out var known) || played!.Value.Date > known)
+                            map[tmdbId] = played!.Value.Date;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // A library that can't answer must not fail the run: those entries just fall back to
+            // the JE write date.
+            _logger.LogDebug("Could not read Jellyfin watch dates for {UserId}: {Message}", userIdN, ex.Message);
+        }
+
+        _watchDates[userIdN] = map;
+        return map;
     }
 
     private async Task<bool> PostToSerializdAsync(
@@ -401,28 +576,42 @@ public sealed class EnhancedReviewSyncRunner
     }
 
     /// <summary>
-    /// Fold one entry's provider outcome into the summary, the sync state, and the activity
-    /// feed. "Failed" here means every linked account rejected it, so a partially-posted entry
-    /// (two accounts, one rejecting) counts as posted and is not retried blindly.
+    /// Fold one entry's outcome into the summary, the sync state, and the activity feed. Counter
+    /// updates live here so every path records what happened identically: a partially-posted entry
+    /// (two accounts, one rejecting) counts as posted rather than being retried blindly, and an
+    /// entry left alone because its film is already on the diary is a permanent skip, not a
+    /// failure to retry every run.
     /// </summary>
     private void RecordOutcome(
         EnhancedReviewEntry entry,
-        bool anySuccess,
+        EntryOutcome outcome,
         EnhancedReviewSyncSummary summary,
         string username,
         string title,
         string destination)
     {
-        if (anySuccess)
+        switch (outcome)
         {
-            summary.Posted++;
-            RecordFailedOrSkipped(entry, EnhancedReviewSyncState.SyncedStatus, destination, null);
-        }
-        else
-        {
-            summary.Failed++;
-            var error = summary.Errors.Count > 0 ? summary.Errors[^1] : "unknown error";
-            RecordFailedOrSkipped(entry, EnhancedReviewSyncState.FailedStatus, destination, error);
+            case EntryOutcome.Posted:
+                summary.Posted++;
+                RecordFailedOrSkipped(entry, EnhancedReviewSyncState.SyncedStatus, destination, null);
+                break;
+
+            case EntryOutcome.Attached:
+                summary.Attached++;
+                RecordFailedOrSkipped(entry, EnhancedReviewSyncState.SyncedStatus, destination, null);
+                break;
+
+            case EntryOutcome.AlreadyLogged:
+                summary.AlreadyLogged++;
+                RecordFailedOrSkipped(entry, EnhancedReviewSyncState.SkippedStatus, AlreadyOnDiaryReason, null);
+                break;
+
+            default:
+                summary.Failed++;
+                var error = summary.Errors.Count > 0 ? summary.Errors[^1] : "unknown error";
+                RecordFailedOrSkipped(entry, EnhancedReviewSyncState.FailedStatus, destination, error);
+                break;
         }
 
         var key = entry.Key;
@@ -439,9 +628,19 @@ public sealed class EnhancedReviewSyncRunner
             TmdbId = key.TmdbId,
             Username = username,
             Timestamp = DateTime.UtcNow,
-            ViewingDate = entry.DiaryDate,
-            Status = anySuccess ? SyncStatus.Success : SyncStatus.Failed,
-            Error = anySuccess ? null : summary.Errors.LastOrDefault(),
+            ViewingDate = ResolveDiaryDate(entry),
+            Status = outcome switch
+            {
+                EntryOutcome.Posted or EntryOutcome.Attached => SyncStatus.Success,
+                EntryOutcome.AlreadyLogged => SyncStatus.Skipped,
+                _ => SyncStatus.Failed
+            },
+            Error = outcome switch
+            {
+                EntryOutcome.AlreadyLogged => "Already on Letterboxd diary for this date",
+                EntryOutcome.Failed => summary.Errors.LastOrDefault(),
+                _ => null
+            },
             Source = SyncEventSource
         });
     }

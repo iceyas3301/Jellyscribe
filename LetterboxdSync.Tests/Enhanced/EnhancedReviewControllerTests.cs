@@ -277,7 +277,15 @@ public class EnhancedReviewControllerTests : IDisposable
             => Task.FromResult(new FilmResult($"film-{tmdbId}", $"filmId-{tmdbId}", null));
 
         public Task<DiaryInfo> GetDiaryInfoAsync(string filmIdOrSlug, string username)
-            => Task.FromResult<DiaryInfo>(null!);
+            => Task.FromResult(new DiaryInfo(null, false));
+
+        public bool SupportsLogEntryEditing => true;
+
+        public Task<string?> FindLogEntryIdAsync(string filmIdOrSlug, DateTime date)
+            => Task.FromResult<string?>(null);
+
+        public Task UpdateLogEntryAsync(string logEntryId, string? reviewText, bool containsSpoilers, double? rating)
+            => Task.CompletedTask;
 
         public Task MarkAsWatchedAsync(string filmSlug, string filmId, DateTime? date, bool liked,
             string? productionId = null, bool rewatch = false, double? rating = null)
