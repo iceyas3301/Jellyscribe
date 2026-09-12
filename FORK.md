@@ -146,10 +146,11 @@ dotnet test  -c Release                       # full upstream suite + the Enhanc
 dotnet test  -c Release --filter "FullyQualifiedName~Enhanced"
 ```
 
-The feature's own tests live in `LetterboxdSync.Tests/Enhanced/` (80 tests): key parsing, rating
+The feature's own tests live in `LetterboxdSync.Tests/Enhanced/` (82 tests): key parsing, rating
 mapping, diary-date timezone handling, attaching to an existing diary entry versus posting a new one,
-watch dates taking precedence over write dates, tolerant store reads, dedupe/retry semantics, routing
-by scope, the per-user privacy boundary, and the admin endpoints.
+watch dates taking precedence over write dates, recognising an entry a late-night watch left on the
+previous (UTC) date, tolerant store reads, dedupe/retry semantics, routing by scope, the per-user
+privacy boundary, and the admin endpoints.
 
 If a review needs re-posting, delete its entry from
 `<config>/plugins/configurations/jellyscribe-enhanced-review-state.json` (or the whole file to

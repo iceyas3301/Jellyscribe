@@ -57,6 +57,7 @@ public class EnhancedReviewSyncRunnerTests : IDisposable
 
         EnhancedReviewSyncRunner.ConfigurationOverrideForTesting = () => _config;
         EnhancedReviewSyncRunner.ResetLastRunForTesting();
+        EnhancedReviewEntry.DiaryTimeZoneOverrideForTesting = EnhancedReviewUnitTests.UtcPlus8;
 
         EnhancedReviewSyncRunner.LetterboxdFactoryForTesting = (username, _, _, _, _) =>
         {
@@ -80,6 +81,7 @@ public class EnhancedReviewSyncRunnerTests : IDisposable
         EnhancedReviewSyncState.ResetForTesting();
         EnhancedReviewSyncRunner.ConfigurationOverrideForTesting = null;
         EnhancedReviewSyncRunner.ResetLastRunForTesting();
+        EnhancedReviewEntry.DiaryTimeZoneOverrideForTesting = null;
         EnhancedReviewSyncRunner.LetterboxdFactoryForTesting = null;
         EnhancedReviewSyncRunner.SerializdFactoryForTesting = null;
         try { Directory.Delete(_tempDir, recursive: true); } catch { }
@@ -522,6 +524,40 @@ public class EnhancedReviewSyncRunnerTests : IDisposable
         Assert.Empty(_letterboxd.Updates);
         Assert.Equal(EnhancedReviewSyncState.SkippedStatus,
             EnhancedReviewSyncState.Get($"{UserN}:movie:278")!.Status);
+    }
+
+    [Fact]
+    public async Task DiaryDate_UsesTheLocalDayOfTheWatch()
+    {
+        AddLetterboxdAccount(UserN, "sample-user");
+        WriteStore(Entry($"{UserN}:movie:558", UserN, "558", "movie", "", 5, "2026-07-16T01:50:06.0000000Z"));
+
+        // 23:54 UTC on Aug 7 is 07:54 on Aug 8 in UTC+08 — the day the film was actually watched.
+        var summary = await RunnerWithWatchDate(558, new DateTime(2026, 8, 7, 23, 54, 0, DateTimeKind.Utc))
+            .RunAsync();
+
+        Assert.Equal(1, summary.Posted);
+        Assert.Equal("2026-08-08", Assert.Single(_letterboxd.Posts).Date);
+    }
+
+    [Fact]
+    public async Task EntryOnTheUtcDateOfALateNightWatch_IsRecognisedAndAttachedTo()
+    {
+        AddLetterboxdAccount(UserN, "sample-user");
+        WriteStore(Entry($"{UserN}:movie:558", UserN, "558", "movie", "", 5, "2026-07-16T01:50:06.0000000Z"));
+
+        // The plugin's daily catch-up logs viewings by the UTC date, which for a late-night watch
+        // is the day before the local one. Without checking both, this review would post a second
+        // entry for a viewing that is already on the diary.
+        _letterboxd.ExistingEntries[new DateTime(2026, 8, 7)] = "entry-utc";
+
+        var summary = await RunnerWithWatchDate(558, new DateTime(2026, 8, 7, 23, 54, 0, DateTimeKind.Utc))
+            .RunAsync();
+
+        Assert.Equal(1, summary.Attached);
+        Assert.Equal(0, summary.Posted);
+        Assert.Empty(_letterboxd.Posts);
+        Assert.Equal("entry-utc", Assert.Single(_letterboxd.Updates).EntryId);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────────

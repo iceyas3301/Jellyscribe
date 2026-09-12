@@ -168,7 +168,14 @@ public sealed class EnhancedReviewSyncRunner
     /// dated to the viewing the diary already knows about, so a review attaches to that entry
     /// instead of landing on its own day.
     /// </summary>
-    private readonly Dictionary<string, Dictionary<int, DateTime>> _watchDates = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Dictionary<int, WatchDates>> _watchDates = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// One film's watch date in both calendars this plugin's own writes have used: the local date
+    /// (what a diary date means) and the UTC date (what the daily catch-up records, so a viewing
+    /// just after midnight local can sit on the previous day).
+    /// </summary>
+    private readonly record struct WatchDates(DateTime Local, DateTime Utc);
 
     /// <summary>
     /// The library and user-data managers are optional so existing construction sites (and tests
@@ -367,6 +374,7 @@ public sealed class EnhancedReviewSyncRunner
     {
         var key = entry.Key;
         var diaryDate = ResolveDiaryDate(entry);
+        var alternateMatchDate = ResolveAlternateMatchDate(entry);
         var anyPosted = false;
         var anyAttached = false;
         var anyAlreadyLogged = false;
@@ -384,9 +392,20 @@ public sealed class EnhancedReviewSyncRunner
                 // fallback posts by slug — resolve once here so both paths work.
                 var film = await service.LookupFilmByTmdbIdAsync(key.TmdbId).ConfigureAwait(false);
 
-                var existingEntryId = service.SupportsLogEntryEditing
-                    ? await service.FindLogEntryIdAsync(film.FilmId, diaryDate).ConfigureAwait(false)
-                    : null;
+                string? existingEntryId = null;
+                if (service.SupportsLogEntryEditing)
+                {
+                    existingEntryId = await service.FindLogEntryIdAsync(film.FilmId, diaryDate)
+                        .ConfigureAwait(false);
+
+                    if (existingEntryId == null && alternateMatchDate.HasValue)
+                    {
+                        // The daily catch-up dates its entries by the UTC date of the last play, so
+                        // a viewing just after midnight local sits a day earlier on the diary.
+                        existingEntryId = await service.FindLogEntryIdAsync(film.FilmId, alternateMatchDate.Value)
+                            .ConfigureAwait(false);
+                    }
+                }
 
                 if (existingEntryId != null)
                 {
@@ -414,7 +433,10 @@ public sealed class EnhancedReviewSyncRunner
                     // post only when this date is not already on the film's diary.
                     var diaryInfo = await service.GetDiaryInfoAsync(film.Slug, account.LetterboxdUsername)
                         .ConfigureAwait(false);
-                    if (Helpers.IsDuplicate(diaryInfo.LastDate, diaryDate))
+                    var alreadyThere = Helpers.IsDuplicate(diaryInfo.LastDate, diaryDate)
+                        || (alternateMatchDate.HasValue
+                            && Helpers.IsDuplicate(diaryInfo.LastDate, alternateMatchDate.Value));
+                    if (alreadyThere)
                     {
                         anyAlreadyLogged = true;
                         _logger.LogInformation(
@@ -469,19 +491,31 @@ public sealed class EnhancedReviewSyncRunner
     /// reliable, since a batch of imported reviews all carry the day JE started storing them.
     /// </summary>
     private DateTime ResolveDiaryDate(EnhancedReviewEntry entry)
-        => GetWatchDates(entry.Key.UserIdN).TryGetValue(entry.Key.TmdbId, out var watchDate)
-            ? watchDate
+        => GetWatchDates(entry.Key.UserIdN).TryGetValue(entry.Key.TmdbId, out var watch)
+            ? watch.Local
             : entry.DiaryDate ?? DateTime.Now.Date;
+
+    /// <summary>
+    /// The other date an entry for this viewing could already carry, or null when both calendars
+    /// agree. The plugin's daily catch-up dates its entries by the UTC date of the last play while
+    /// real-time playback uses the local date, so an existing entry can sit either side of midnight
+    /// from the one we would write. Used only to find an entry to attach to or to avoid
+    /// duplicating one — never as the date of a new entry.
+    /// </summary>
+    private DateTime? ResolveAlternateMatchDate(EnhancedReviewEntry entry)
+        => GetWatchDates(entry.Key.UserIdN).TryGetValue(entry.Key.TmdbId, out var watch) && watch.Utc != watch.Local
+            ? watch.Utc
+            : null;
 
     /// <summary>
     /// Jellyfin watch dates for one user, keyed by TMDb id, resolved once per run. Empty when the
     /// library can't answer, in which case reviews fall back to the JE write date.
     /// </summary>
-    private Dictionary<int, DateTime> GetWatchDates(string userIdN)
+    private Dictionary<int, WatchDates> GetWatchDates(string userIdN)
     {
         if (_watchDates.TryGetValue(userIdN, out var cached)) return cached;
 
-        var map = new Dictionary<int, DateTime>();
+        var map = new Dictionary<int, WatchDates>();
 
         try
         {
@@ -504,10 +538,18 @@ public sealed class EnhancedReviewSyncRunner
                         var played = _userDataManager.GetUserData(user, item)?.LastPlayedDate;
                         if (!Helpers.HasPlausibleWatchDate(played)) continue;
 
+                        var utc = played!.Value.Kind == DateTimeKind.Utc
+                            ? played.Value
+                            : DateTime.SpecifyKind(played.Value, DateTimeKind.Utc);
+
+                        var dates = new WatchDates(
+                            TimeZoneInfo.ConvertTimeFromUtc(utc, EnhancedReviewEntry.DiaryTimeZone).Date,
+                            utc.Date);
+
                         // The latest play is the one the playback sync would log, so a rewatch
                         // doesn't strand the review on the older viewing.
-                        if (!map.TryGetValue(tmdbId, out var known) || played!.Value.Date > known)
-                            map[tmdbId] = played!.Value.Date;
+                        if (!map.TryGetValue(tmdbId, out var known) || dates.Local > known.Local)
+                            map[tmdbId] = dates;
                     }
                 }
             }
