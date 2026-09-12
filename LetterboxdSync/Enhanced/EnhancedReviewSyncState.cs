@@ -136,6 +136,19 @@ public static class EnhancedReviewSyncState
         }
     }
 
+    /// <summary>
+    /// The persisted no-backfill cutoff, or null when none has been established yet. Read-only —
+    /// unlike <see cref="EnsureSinceUtc"/> it never creates one, so merely looking at the dashboard
+    /// can't decide when the integration's first run happened.
+    /// </summary>
+    public static DateTimeOffset? SinceUtcOrNull()
+    {
+        lock (_lock)
+        {
+            return Load().SinceUtc;
+        }
+    }
+
     public static EnhancedReviewSyncRecord? Get(string key)
     {
         lock (_lock)

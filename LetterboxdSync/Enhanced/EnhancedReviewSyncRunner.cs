@@ -130,6 +130,22 @@ public sealed class EnhancedReviewSyncRunner
         EnhancedReviewSyncState.SetLogger(logger);
     }
 
+    /// <summary>
+    /// Whether a run with this configuration is responsible for the given entry. Backfill posts
+    /// everything JE has; without it, only reviews written at or after the cutoff the integration
+    /// established on its first run. A null cutoff with backfill off means no run has happened yet,
+    /// and the next one sets the cutoff to "now" — so nothing already in the store can qualify.
+    ///
+    /// Shared with the status endpoint so the dashboard can never report a scope the runner does
+    /// not actually use.
+    /// </summary>
+    internal static bool IsInScope(EnhancedReviewEntry entry, bool backfill, DateTimeOffset? cutoff)
+    {
+        if (backfill) return true;
+        if (cutoff == null) return false;
+        return (entry.LastWriteUtc ?? DateTimeOffset.MinValue) >= cutoff.Value;
+    }
+
     public async Task<EnhancedReviewSyncSummary> RunAsync(
         IProgress<double>? progress = null, CancellationToken cancellationToken = default)
     {
@@ -180,7 +196,7 @@ public sealed class EnhancedReviewSyncRunner
                 : EnhancedReviewSyncState.EnsureSinceUtc(DateTimeOffset.UtcNow);
 
             var entries = load.Entries
-                .Where(e => cutoff == null || (e.LastWriteUtc ?? DateTimeOffset.MinValue) >= cutoff.Value)
+                .Where(e => IsInScope(e, config.EnhancedReviewSyncBackfill, cutoff))
                 .OrderBy(e => e.LastWriteUtc ?? DateTimeOffset.MinValue)
                 .ToList();
 

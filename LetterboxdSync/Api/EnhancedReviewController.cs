@@ -47,6 +47,16 @@ public sealed class EnhancedReviewStatus
     public string? StoreError { get; set; }
     public int StoreEntries { get; set; }
 
+    /// <summary>
+    /// Entries a run will not even look at, because they were written before the no-backfill
+    /// cutoff. With backfill off these are the reviews that exist on the server but are being
+    /// deliberately left alone — the number that would post the moment backfill is switched on.
+    /// </summary>
+    public int OutOfScope { get; set; }
+
+    /// <summary>The persisted no-backfill cutoff, when one has been established.</summary>
+    public DateTimeOffset? SinceUtc { get; set; }
+
     public int Pending { get; set; }
     public int Synced { get; set; }
     public int Skipped { get; set; }
@@ -101,17 +111,28 @@ public class EnhancedReviewController : ControllerBase
         var load = EnhancedReviewStore.Load(config?.EnhancedReviewsPath, _logger);
         var counts = EnhancedReviewSyncState.GetCounts();
 
+        // Report the scope the runner would actually use. Without this the dashboard claims every
+        // review in JE's store is pending even when the cutoff means most of them will be skipped,
+        // which reads as "this is about to post 68 reviews" when it is not.
+        var backfill = config?.EnhancedReviewSyncBackfill ?? true;
+        var since = EnhancedReviewSyncState.SinceUtcOrNull();
+        var inScope = load.Entries
+            .Where(e => EnhancedReviewSyncRunner.IsInScope(e, backfill, since))
+            .ToList();
+
         var status = new EnhancedReviewStatus
         {
             Enabled = config?.EnhancedReviewSyncEnabled == true,
-            Backfill = config?.EnhancedReviewSyncBackfill ?? true,
+            Backfill = backfill,
             MaxAttempts = maxAttempts,
             StorePath = load.Path,
             StorePresent = load.StorePresent,
             StoreReadable = load.StoreReadable,
             StoreError = load.Error,
             StoreEntries = load.Entries.Count,
-            Pending = load.Entries.Count(e => EnhancedReviewSyncState.ShouldAttempt(
+            OutOfScope = load.Entries.Count - inScope.Count,
+            SinceUtc = since,
+            Pending = inScope.Count(e => EnhancedReviewSyncState.ShouldAttempt(
                 e.Key.CompositeId, e.Fingerprint, maxAttempts)),
             Synced = counts.Synced,
             Skipped = counts.Skipped,

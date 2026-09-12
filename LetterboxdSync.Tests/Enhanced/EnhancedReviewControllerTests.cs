@@ -171,12 +171,70 @@ public class EnhancedReviewControllerTests : IDisposable
         foreach (var expected in new[]
                  {
                      "Enabled", "Backfill", "MaxAttempts", "StorePath", "StorePresent", "StoreReadable",
-                     "StoreError", "StoreEntries", "Pending", "Synced", "Skipped", "Failed",
+                     "StoreError", "StoreEntries", "OutOfScope", "SinceUtc", "Pending", "Synced", "Skipped", "Failed",
                      "IsRunning", "LastRunCompletedUtc", "LastRun", "LastRunErrors", "Entries"
                  })
         {
             Assert.Contains(expected, names);
         }
+    }
+
+    [Fact]
+    public void Status_WithBackfillOff_LeavesPreCutoffReviewsOutOfScope()
+    {
+        _config.EnhancedReviewSyncEnabled = true;
+        _config.EnhancedReviewSyncBackfill = false;
+
+        // The first run establishes the cutoff at "now"; these entries were written in July.
+        EnhancedReviewSyncState.EnsureSinceUtc(new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero));
+
+        WriteStore(
+            Entry($"{UserN}:movie:278", "278", "movie"),
+            Entry($"{UserN}:movie:142", "142", "movie"));
+
+        var status = Status();
+
+        Assert.Equal(2, status.StoreEntries);
+        Assert.Equal(2, status.OutOfScope);
+        Assert.Equal(0, status.Pending);
+        Assert.Equal(0, status.Synced);
+    }
+
+    [Fact]
+    public void Status_WithBackfillOffAndNoCutoffYet_PromisesNothing()
+    {
+        // No run has happened, so no cutoff exists. The next run sets one to "now", which means
+        // nothing already in the store can post — the dashboard must not claim otherwise.
+        _config.EnhancedReviewSyncEnabled = true;
+        _config.EnhancedReviewSyncBackfill = false;
+
+        WriteStore(Entry($"{UserN}:movie:278", "278", "movie"));
+
+        var status = Status();
+
+        Assert.Null(status.SinceUtc);
+        Assert.Equal(1, status.OutOfScope);
+        Assert.Equal(0, status.Pending);
+    }
+
+    [Fact]
+    public void Status_WithBackfillOn_BringsTheCutoffEntriesBackIntoScope()
+    {
+        // Turning backfill on later is the whole point of the cutoff: the reviews held back while
+        // proving the integration must become pending again, not stay stranded.
+        _config.EnhancedReviewSyncEnabled = true;
+        _config.EnhancedReviewSyncBackfill = true;
+        EnhancedReviewSyncState.EnsureSinceUtc(new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero));
+
+        WriteStore(
+            Entry($"{UserN}:movie:278", "278", "movie"),
+            Entry($"{UserN}:tv:1396", "1396", "tv"));
+
+        var status = Status();
+
+        Assert.Equal(0, status.OutOfScope);
+        Assert.Equal(2, status.Pending);
+        Assert.Equal(new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero), status.SinceUtc);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────────

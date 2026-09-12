@@ -959,7 +959,11 @@
                                 if (!s.StorePresent) {
                                     bits.push('no Jellyfin Enhanced review store found');
                                 } else {
-                                    bits.push(s.StoreEntries + ' review(s): ' + s.Pending + ' pending, ' + s.Synced + ' synced, ' + s.Skipped + ' skipped, ' + s.Failed + ' failed');
+                                    var line = s.StoreEntries + ' review(s) in Jellyfin Enhanced: ' + s.Pending + ' pending, ' + s.Synced + ' synced, ' + s.Skipped + ' skipped, ' + s.Failed + ' failed';
+                                    if (!s.Backfill && s.OutOfScope > 0) {
+                                        line += ' · ' + s.OutOfScope + ' written before the cutoff, held back until backfill is on';
+                                    }
+                                    bits.push(line);
                                 }
                                 if (s.LastRun) bits.push('last run: ' + s.LastRun);
                                 el.textContent = bits.join(' · ');
