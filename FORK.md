@@ -98,9 +98,13 @@ reviews** panel on the plugin's Integrations tab.
 The fork keeps upstream's plugin GUID and name, so it **replaces** the stock Jellyscribe install —
 you do not end up with two plugins.
 
-The fork's `AssemblyVersion` is deliberately one minor line ahead of upstream (`2.4.0.0` vs
-upstream's `2.3.1.0`) so Jellyfin's plugin manager never sees the stock build as an upgrade and
-silently replaces the fork. Retarget the version line when upstream catches up.
+The fork's `AssemblyVersion` is deliberately ahead of upstream (`2.5.0.0` vs upstream's `2.3.1.0`) so
+Jellyfin's plugin manager never sees the stock build as an upgrade and silently replaces the fork.
+**Bump it in both `Directory.Build.props` and `LetterboxdSync/LetterboxdSync.csproj` whenever a change
+ships**, so any installed build can be identified by its version alone instead of by DLL hash. Retarget
+the line when upstream's own version catches up — that needs a human decision, and the sync gate stops
+rather than auto-bumping. (`Directory.Build.props` also carries upstream's `<Version>` field, which is
+theirs; only `AssemblyVersion`/`FileVersion` identify the plugin.)
 
 ```bash
 # build
