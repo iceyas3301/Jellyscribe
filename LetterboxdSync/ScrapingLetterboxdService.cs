@@ -63,6 +63,9 @@ public class ScrapingLetterboxdService : ILetterboxdService
         => throw new NotSupportedException(
             "The scraping Letterboxd service cannot edit existing log entries.");
 
+    public Task SetFilmRatingAsync(string filmSlug, string filmId, double rating)
+        => _diary.SetFilmRatingAsync(filmSlug, filmId, rating);
+
     public void Dispose()
     {
         _http.Dispose();

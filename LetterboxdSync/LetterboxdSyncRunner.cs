@@ -192,6 +192,31 @@ public class LetterboxdSyncRunner
             return;
         }
 
+        // Drop films in libraries this account excludes (issue #124). Runs after the date
+        // filter so the library lookup only touches the narrowed set. Logged, not recorded in
+        // sync history: an excluded library is the user's choice, not a failure.
+        if (account.ExcludedLibraryIds.Count > 0)
+        {
+            var skippedExcluded = 0;
+            movies = movies.Where(m =>
+            {
+                if (!LibraryExclusion.IsExcluded(_libraryManager, m, account.ExcludedLibraryIds, _logger)) return true;
+                skippedExcluded++;
+                return false;
+            }).ToList();
+
+            if (skippedExcluded > 0)
+                _logger.LogInformation(
+                    "Skipping {Count} films for {Username} as {LbUser}: in a library this account excludes",
+                    skippedExcluded, user.Username, account.LetterboxdUsername);
+
+            if (movies.Count == 0)
+            {
+                SyncProgress.Complete(SyncProgress.TrackLetterboxd);
+                return;
+            }
+        }
+
         // Skip films marked played on Jellyfin with no plausible LastPlayedDate: either
         // missing entirely, or an epoch-adjacent value (e.g. 1970-01-01) some clients send
         // when marking an item watched manually without a real timestamp (issue #106). In

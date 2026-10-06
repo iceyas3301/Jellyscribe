@@ -7,8 +7,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
-    <AssemblyVersion>2.5.0.0</AssemblyVersion>
-    <FileVersion>2.5.0.0</FileVersion>
+    <AssemblyVersion>2.11.0.0</AssemblyVersion>
+    <FileVersion>2.11.0.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -32,7 +32,6 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Web\configPage.html" />
-    <EmbeddedResource Include="Web\configPage.js" />
     <EmbeddedResource Include="Web\statsPage.html" />
     <EmbeddedResource Include="Web\userPage.html" />
     <EmbeddedResource Include="Web\sidebar.js" />

@@ -36,10 +36,12 @@ Uses Letterboxd's current JSON API (`/api/v0/production-log-entries`) and Serial
 - **Duplicate detection**, won't log the same title twice on the same day
 - **Rewatch detection**, real-time playback automatically marks rewatches
 - **Date filtering**, limit catch-up syncs to recently watched titles
+- **Library exclusion**, keep whole libraries (an Anime library you track elsewhere, say) off a Letterboxd or Serializd account
 
 ### Ratings, reviews & diary
 
 - **Rating sync, both ways**, Jellyfin ratings (0-10) map to Letterboxd stars (0.5-5.0) or Serializd's 1-10 scale, and ratings you set on either service seed your Jellyfin user rating back
+- **Ratings after the watch**, rate a film any time after you've watched it (or without watching it) and, about ten seconds after you settle on a score, it becomes your Letterboxd rating for that film. Jellyfin's own web app has no star rating (only the favourite heart), so the easy way in is [Jellyfin Enhanced](https://github.com/n00bcodr/Jellyfin-Enhanced) 12.10+: in its settings turn on "Enable User Written Reviews" and "Also save review star ratings as the user's Jellyfin rating", and the stars on your reviews sync. Any other app that saves ratings to Jellyfin works too. Only changes are sent (ratings already in Jellyfin when you update are left alone until you change them), and a failed send is retried a few times. As on Letterboxd, rating a film marks it watched and removes it from your watchlist; clearing a rating in Jellyfin does not unrate it on Letterboxd. Some apps (Infuse, for one) never save ratings to Jellyfin, so their ratings can't be synced. Letterboxd only for now, not Serializd
 - **Favorites**, sync Jellyfin favorites as Letterboxd likes or Serializd likes
 - **Reviews**, write and post reviews to Letterboxd (films) or Serializd (shows or individual episodes) from the plugin dashboard
 - **Diary import**, mark Jellyfin movies or episodes as played if they're already in your Letterboxd or Serializd diary
@@ -71,31 +73,28 @@ Full feature parity with the Letterboxd side: real-time sync, ratings, reviews, 
 ### Plugin repository (recommended)
 
 1. In Jellyfin, go to **Dashboard > Plugins > Repositories**
-2. Add the **File Transformation** repository (required for the sidebar link):
-   - **Name:** `File Transformation`
-   - **URL:** `https://www.iamparadox.dev/jellyfin/plugins/manifest.json`
-3. Add the Jellyscribe repository:
+2. Add the Jellyscribe repository:
    - **Name:** `Jellyscribe`
    - **URL:** `https://lbsync-telemetry.lachlanbyoung.workers.dev/manifest.json`
-4. Go to **Catalog**, install **File Transformation**, then install **Jellyscribe**
-5. Restart Jellyfin
-6. Hard-refresh the Jellyfin web UI (Ctrl/Cmd + Shift + R) so the new sidebar link loads
+3. Go to **Catalog** and install **Jellyscribe**
+4. Restart Jellyfin
+5. Hard-refresh the Jellyfin web UI (Ctrl/Cmd + Shift + R) so the new sidebar link loads
 
 ### Manual install
 
-1. Install the **File Transformation** plugin first (see [iamparadox27/Jellyfin.Plugin.FileTransformation](https://github.com/IAmParadox27/jellyfin-plugin-file-transformation/releases)), required for the sidebar link to appear
-2. Download the latest Jellyscribe ZIP from [Releases](https://github.com/builtbyproxy/Jellyscribe/releases)
-3. Extract `Jellyscribe.dll` and `HtmlAgilityPack.dll` to your Jellyfin plugins directory
-4. Restart Jellyfin
+1. Download the latest Jellyscribe ZIP from [Releases](https://github.com/builtbyproxy/Jellyscribe/releases)
+2. Extract `Jellyscribe.dll` and `HtmlAgilityPack.dll` to your Jellyfin plugins directory
+3. Restart Jellyfin
 
 ## Setup
 
 1. Go to **Dashboard > Plugins > Jellyscribe**
 2. Switch to the **Settings** tab
 3. Click **+ Add Account**
-4. Select your Jellyfin user, enter your Letterboxd username and password
-5. Check **Enabled**
-6. Click **Save**
+4. Select your Jellyfin user, enter your Letterboxd **username** (the name in `letterboxd.com/<username>/`, not your email: Letterboxd no longer accepts email sign-in) and password
+5. Click **Verify login** to check it works; it says whether the official API or the website login was used, or why both failed
+6. Check **Enabled**
+7. Click **Save**
 
 That's it. Watch a movie and check your Letterboxd diary.
 
@@ -109,6 +108,7 @@ These apply the same way whether the account is a Letterboxd (film) or Serializd
 |---|---|
 | **Enabled** | Master switch for this account; nothing syncs while unchecked, saved settings are kept |
 | **Favorites as liked** | Marks the title as "liked" on Letterboxd or Serializd if favorited in Jellyfin |
+| **Sync ratings to Letterboxd** | Letterboxd accounts only, on by default. Sends a film's rating to Letterboxd whenever you change it in Jellyfin, not just when the watch is logged |
 | **Recently played only** | Limits daily catch-up to titles played in the last N days |
 | **Primary account** | When one Jellyfin user links multiple accounts on the same service, the primary wins on rating-import conflicts and is preselected in the review modal |
 | **Watchlist to playlist** | Mirrors your Letterboxd or Serializd watchlist into a Jellyfin playlist daily; each account gets its own playlist (name configurable) |
@@ -117,6 +117,7 @@ These apply the same way whether the account is a Letterboxd (film) or Serializd
 | **Mirror into Seerr watchlist** | Two-way mirror of your watchlist into your Seerr user's own watchlist (movies for Letterboxd accounts, TV for Serializd accounts) |
 | **Import diary as played** | Marks Jellyfin movies or episodes as played if they appear in your Letterboxd or Serializd diary |
 | **Skip previously synced** | Uses the plugin's local sync history to skip titles already logged without hitting Letterboxd/Serializd; recommended, especially on large libraries |
+| **Excluded libraries** | Jellyfin libraries whose films or episodes are never logged to this account's diary (by the scheduled sync or the real-time one) and whose ratings are never sent. Applies to future syncs only; anything already logged stays on Letterboxd or Serializd. It governs exports only: diary import, watchlist sync, and Seerr requests still look at every library |
 | **Stop on failure** | Halts the run at the first failure to avoid inflaming rate limits; the rest are picked up next run |
 | **Raw Cookies** | For Cloudflare bypass, Letterboxd accounts only, see below |
 
@@ -198,10 +199,11 @@ Unlike the anonymous telemetry above, **logs are not anonymous**, they can conta
 
 ## Requirements
 
-- Jellyfin 10.11+ (current releases are also known to run on the Jellyfin 12.0 release candidates; official 12.0 support will be declared once 12.0 stable ships and passes verification, see `openspec/changes/add-jellyfin-12-support/`)
-  - Migrating your server to Jellyfin 12? It is safe to follow Jellyfin's advice and remove the plugin first: your accounts, settings, and sync history all survive a reinstall from the catalog.
+- **Jellyfin 10.11.9 or newer, including Jellyfin 12.x.** One release serves both, with nothing to change in your config and no separate Jellyfin 12 download. Verified by loading the shipped build on a clean Jellyfin 12.0.0 server, and every change is built and tested against the Jellyfin 12 SDK in CI.
+  - **Migrating your server to Jellyfin 12?** Jellyfin advises removing (or disabling) external plugins before the upgrade, and that is safe to follow here: your accounts, settings, and sync history live outside the plugin folder and all survive a reinstall from the catalog.
+  - Note that Jellyfin 12 moved where plugins live, from `config/data/plugins/` to `config/plugins/`. Jellyfin handles that move for you on upgrade. It only matters if you install the plugin by hand rather than from the catalog, in which case use the new path on 12.x.
 - A Letterboxd and/or Serializd account
-- [File Transformation plugin](https://github.com/IAmParadox27/jellyfin-plugin-file-transformation), required for the Jellyscribe link to appear in the Jellyfin sidebar (everything else works without it)
+- Jellyscribe opens as its own page inside Jellyfin (no reload, like Jellyfin Enhanced's Bookmarks), from the sidebar on Jellyfin 10.11 or the profile (avatar) menu on Jellyfin 12, and you can bookmark it at `#/jellyscribe`. This needs no other plugin; if you already run the [File Transformation plugin](https://github.com/IAmParadox27/jellyfin-plugin-file-transformation), Jellyscribe uses it too, and you still get one link
 - Optional: a [Seerr](https://github.com/seerr-team/seerr) instance for the auto-request and watchlist-mirror integrations
 
 ## Building from source

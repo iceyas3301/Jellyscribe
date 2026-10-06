@@ -248,6 +248,7 @@ public class LetterboxdController : JellyfinUserApiController
                 userAgent = (string?)null,
                 enabled = false,
                 syncFavorites = false,
+                syncRatings = true,
                 enableDateFilter = false,
                 dateFilterDays = 7,
                 enableWatchlistSync = false,
@@ -256,6 +257,7 @@ public class LetterboxdController : JellyfinUserApiController
                 mirrorJellyseerrWatchlist = false,
                 skipPreviouslySynced = true,
                 stopOnFailure = false,
+                excludedLibraryIds = new List<string>(),
                 isConfigured = false
             });
         }
@@ -268,6 +270,7 @@ public class LetterboxdController : JellyfinUserApiController
             userAgent = account.UserAgent,
             enabled = account.Enabled,
             syncFavorites = account.SyncFavorites,
+            syncRatings = account.SyncRatings,
             enableDateFilter = account.EnableDateFilter,
             dateFilterDays = account.DateFilterDays,
             enableWatchlistSync = account.EnableWatchlistSync,
@@ -277,6 +280,7 @@ public class LetterboxdController : JellyfinUserApiController
             mirrorJellyseerrWatchlist = account.MirrorJellyseerrWatchlist,
             skipPreviouslySynced = account.SkipPreviouslySynced,
             stopOnFailure = account.StopOnFailure,
+            excludedLibraryIds = account.ExcludedLibraryIds,
             isConfigured = true
         });
     }
@@ -299,6 +303,89 @@ public class LetterboxdController : JellyfinUserApiController
         return Ok(new { breakers = open });
     }
 
+    /// <summary>Test-only replacements for the two login attempts in <see cref="VerifyLogin"/>.</summary>
+    internal static Func<string, string, Task>? VerifyApiLoginForTesting;
+
+    internal static Func<string, string, string?, string?, Task>? VerifyWebsiteLoginForTesting;
+
+    /// <summary>
+    /// Message when a Letterboxd account name is an email address, else null. Letterboxd's API
+    /// rejects email sign-in ("Sign-in via email address has been disabled"), and the website
+    /// path builds diary URLs from the username, so an email never works.
+    /// </summary>
+    internal static string? EmailAsUsernameError(string? username) =>
+        username != null && username.Contains('@')
+            ? "Letterboxd no longer accepts an email address to sign in. Use your Letterboxd username, the name in letterboxd.com/<username>/."
+            : null;
+
+    /// <summary>Letterboxd's own reason (an OAuth error_description) when present, else the sanitised message.</summary>
+    internal static string DescribeLoginError(Exception ex)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(ex.Message, "\"error_description\"\\s*:\\s*\"([^\"]+)\"");
+        return match.Success ? match.Groups[1].Value : AuthBreaker.Sanitize(ex.Message) ?? "Unknown error";
+    }
+
+    /// <summary>
+    /// Checks Letterboxd credentials the way sync will use them: the official API first, then the
+    /// website login (with the optional raw cookies and user agent). Reports which one worked, or
+    /// both reasons. Saves nothing and does not touch the auth breaker.
+    /// </summary>
+    [HttpPost("Verify")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult> VerifyLogin([FromBody] LetterboxdVerifyRequest request)
+    {
+        var username = request?.LetterboxdUsername?.Trim();
+        if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(request!.LetterboxdPassword))
+            return BadRequest(new { error = "Username and password are required." });
+
+        var emailError = EmailAsUsernameError(username);
+        if (emailError != null)
+            return BadRequest(new { error = emailError });
+
+        string apiError;
+        try
+        {
+            if (VerifyApiLoginForTesting != null)
+            {
+                await VerifyApiLoginForTesting(username, request.LetterboxdPassword).ConfigureAwait(false);
+            }
+            else
+            {
+                using var api = new LetterboxdApiClient(_logger);
+                await api.AuthenticateAsync(username, request.LetterboxdPassword).ConfigureAwait(false);
+            }
+
+            return Ok(new { ok = true, via = "api" });
+        }
+        catch (Exception ex)
+        {
+            apiError = DescribeLoginError(ex);
+        }
+
+        try
+        {
+            if (VerifyWebsiteLoginForTesting != null)
+            {
+                await VerifyWebsiteLoginForTesting(username, request.LetterboxdPassword, request.RawCookies, request.UserAgent).ConfigureAwait(false);
+            }
+            else
+            {
+                using var website = new ScrapingLetterboxdService(_logger, request.UserAgent);
+                await website.AuthenticateAsync(username, request.LetterboxdPassword, request.RawCookies).ConfigureAwait(false);
+            }
+
+            return Ok(new { ok = true, via = "website", apiError });
+        }
+        catch (Exception ex)
+        {
+            var websiteError = DescribeLoginError(ex);
+            _logger.LogWarning("Letterboxd credential verification failed for {LbUser}: API: {ApiError}; website: {WebsiteError}",
+                username, apiError, websiteError);
+            return BadRequest(new { error = "Login failed.", apiError, websiteError });
+        }
+    }
+
     [HttpPut("Account")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -307,6 +394,9 @@ public class LetterboxdController : JellyfinUserApiController
         var userId = GetCurrentUserId();
         if (string.IsNullOrEmpty(userId))
             return BadRequest(new { error = "Could not determine user" });
+
+        if (EmailAsUsernameError(request.LetterboxdUsername) is { } emailError)
+            return BadRequest(new { error = emailError });
 
         var account = Config.Accounts.FirstOrDefault(a => a.UserJellyfinId == userId);
         if (account == null)
@@ -321,6 +411,7 @@ public class LetterboxdController : JellyfinUserApiController
         account.UserAgent = request.UserAgent;
         account.Enabled = request.Enabled;
         account.SyncFavorites = request.SyncFavorites;
+        account.SyncRatings = request.SyncRatings ?? account.SyncRatings;
         account.EnableDateFilter = request.EnableDateFilter;
         account.DateFilterDays = request.DateFilterDays;
         account.EnableWatchlistSync = request.EnableWatchlistSync;
@@ -330,6 +421,7 @@ public class LetterboxdController : JellyfinUserApiController
         account.MirrorJellyseerrWatchlist = request.MirrorJellyseerrWatchlist;
         account.SkipPreviouslySynced = request.SkipPreviouslySynced;
         account.StopOnFailure = request.StopOnFailure;
+        account.ExcludedLibraryIds = LibraryExclusion.ResolveForSave(request.ExcludedLibraryIds, account.ExcludedLibraryIds);
 
         // IsPrimary and PlaylistName are deliberately NOT copied from the request.
         // The userPage form does not expose them; deserialisation would set them to
@@ -377,6 +469,7 @@ public class LetterboxdController : JellyfinUserApiController
                 authPausedSince = AuthBreaker.GetState(userId, a.LetterboxdUsername)?.FirstFailureUtc,
                 enabled = a.Enabled,
                 syncFavorites = a.SyncFavorites,
+                syncRatings = a.SyncRatings,
                 enableDateFilter = a.EnableDateFilter,
                 dateFilterDays = a.DateFilterDays,
                 enableWatchlistSync = a.EnableWatchlistSync,
@@ -387,7 +480,8 @@ public class LetterboxdController : JellyfinUserApiController
                 skipPreviouslySynced = a.SkipPreviouslySynced,
                 stopOnFailure = a.StopOnFailure,
                 isPrimary = a.IsPrimary,
-                playlistName = a.PlaylistName
+                playlistName = a.PlaylistName,
+                excludedLibraryIds = a.ExcludedLibraryIds
             })
             .ToList();
 
@@ -419,12 +513,15 @@ public class LetterboxdController : JellyfinUserApiController
         {
             if (string.IsNullOrWhiteSpace(request.Accounts[i].LetterboxdUsername))
                 return BadRequest(new { error = $"Account #{i + 1} is missing a Letterboxd username" });
+            if (EmailAsUsernameError(request.Accounts[i].LetterboxdUsername) is { } emailError)
+                return BadRequest(new { error = emailError });
         }
 
         // Preserve every account that doesn't belong to the calling user. The admin
         // page is the only path that should touch other users' rows; this endpoint
         // is per-user scope.
         var preserved = Config.Accounts.Where(a => a.UserJellyfinId != userId).ToList();
+        var previous = Config.Accounts.Where(a => a.UserJellyfinId == userId).ToList();
 
         var mine = new List<Account>();
         foreach (var req in request.Accounts)
@@ -438,6 +535,9 @@ public class LetterboxdController : JellyfinUserApiController
                 UserAgent = req.UserAgent,
                 Enabled = req.Enabled,
                 SyncFavorites = req.SyncFavorites,
+                SyncRatings = req.SyncRatings
+                    ?? previous.FirstOrDefault(p => string.Equals(p.LetterboxdUsername, req.LetterboxdUsername, StringComparison.OrdinalIgnoreCase))?.SyncRatings
+                    ?? true,
                 EnableDateFilter = req.EnableDateFilter,
                 DateFilterDays = req.DateFilterDays,
                 EnableWatchlistSync = req.EnableWatchlistSync,
@@ -448,7 +548,10 @@ public class LetterboxdController : JellyfinUserApiController
                 SkipPreviouslySynced = req.SkipPreviouslySynced,
                 StopOnFailure = req.StopOnFailure,
                 IsPrimary = req.IsPrimary,
-                PlaylistName = string.IsNullOrWhiteSpace(req.PlaylistName) ? null : req.PlaylistName.Trim()
+                PlaylistName = string.IsNullOrWhiteSpace(req.PlaylistName) ? null : req.PlaylistName.Trim(),
+                // A client that omits the field keeps the account's stored exclusions.
+                ExcludedLibraryIds = LibraryExclusion.ResolveForSave(req.ExcludedLibraryIds,
+                    previous.FirstOrDefault(p => string.Equals(p.LetterboxdUsername, req.LetterboxdUsername, StringComparison.OrdinalIgnoreCase))?.ExcludedLibraryIds)
             });
         }
 
@@ -925,7 +1028,10 @@ public class LetterboxdController : JellyfinUserApiController
             if (userData == null) return;
 
             userData.Rating = jellyfinRating;
-            _userDataManager.SaveUserData(user, movie, userData, UserDataSaveReason.UpdateUserRating, CancellationToken.None);
+            // Import, not UpdateUserRating: the value originates on the Letterboxd side (the review
+            // post already carried it there), and RatingSyncHandler ignores Import saves, so this
+            // mirror can never echo back out as a second push.
+            _userDataManager.SaveUserData(user, movie, userData, UserDataSaveReason.Import, CancellationToken.None);
 
             _logger.LogInformation("Mirrored Letterboxd rating {LbRating} -> Jellyfin {JfRating} for {Title} ({UserId})",
                 letterboxdRating.Value, jellyfinRating.Value, movie.Name, userId);

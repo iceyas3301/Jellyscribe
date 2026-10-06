@@ -43,4 +43,14 @@ public interface ILetterboxdService : IDisposable
     /// text are sent, so the entry's date and its membership of the diary are left alone.
     /// </summary>
     Task UpdateLogEntryAsync(string logEntryId, string? reviewText, bool containsSpoilers, double? rating);
+
+    /// <summary>
+    /// Sets the member's film rating (the one on the film page and profile, not a diary entry).
+    /// <paramref name="rating"/> is Letterboxd half-stars, 0.5 to 5.0, already mapped by the caller
+    /// with <see cref="Helpers.MapRating"/>; each implementation converts to its own wire scale.
+    /// <paramref name="filmId"/> must come from this instance's <see cref="LookupFilmByTmdbIdAsync"/>,
+    /// since the two implementations use different id forms. Letterboxd also marks a rated film
+    /// watched, which removes it from the member's watchlist.
+    /// </summary>
+    Task SetFilmRatingAsync(string filmSlug, string filmId, double rating);
 }

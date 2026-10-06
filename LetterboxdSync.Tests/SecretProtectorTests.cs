@@ -193,7 +193,7 @@ public class SecretProtectorTests : IDisposable
     [Fact]
     public void ProtectedShadowProperties_AreNotSerializedToJson()
     {
-        // configPage.js does getPluginConfiguration -> mutate -> updatePluginConfiguration,
+        // configPage.html does getPluginConfiguration -> mutate -> updatePluginConfiguration,
         // echoing the full JSON payload back verbatim. If the encrypted shadow properties
         // leaked into that JSON, a stale echoed ciphertext could clobber a freshly-typed
         // plaintext value on save (see Account.LetterboxdPasswordProtected's doc comment).

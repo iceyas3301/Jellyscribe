@@ -10,6 +10,195 @@ export type ReleaseNotes = {
 
 export const releaseNotes: ReleaseNotes[] = [
   {
+    version: '2.10.0',
+    headline: 'Jellyscribe now opens inside Jellyfin, on Jellyfin 12 too',
+    summary:
+      'Clicking Jellyscribe used to reload the whole Jellyfin web app and drop you onto a plugin settings page. It now opens as a proper page inside Jellyfin, the way Jellyfin Enhanced\'s Bookmarks does: no reload, Jellyfin\'s header and menu stay put, and the back button takes you straight back to where you were. You can also bookmark it, since it has its own address ending in #/jellyscribe. On Jellyfin 12, where the sidebar was replaced by a menu under your profile picture, Jellyscribe now appears in that menu, so it is reachable there for the first time. Everything on the page works as before, and the old settings-page address still works.',
+    highlights: {
+      new: [
+        'Jellyscribe opens as a page inside Jellyfin with no reload, and has its own bookmarkable address (#/jellyscribe).',
+        'On Jellyfin 12, Jellyscribe appears in the menu under your profile picture.',
+      ],
+    },
+  },
+  {
+    version: '2.9.0',
+    headline: 'The Jellyscribe sidebar link no longer needs another plugin',
+    summary:
+      'The Jellyscribe link in Jellyfin\'s sidebar used to appear only if you had also installed the File Transformation plugin, so many people never saw it and had to dig through the dashboard to find their settings. Jellyscribe now adds the link itself, the same way Jellyfin Enhanced adds its own menu, and nothing on your server\'s disk is changed. If you already use File Transformation, nothing changes for you and you still get exactly one link. The link also now works on servers that run Jellyfin under a sub-path such as /jellyfin, where it used to point at the wrong address. On Jellyfin 12, the web client moved its menu into the profile button, so the link doesn\'t show there yet; open Jellyscribe from Dashboard, Plugins instead.',
+    highlights: {
+      new: [
+        'The Jellyscribe sidebar link appears without the File Transformation plugin.',
+      ],
+      fixes: [
+        'The sidebar link works on servers that run Jellyfin under a base URL such as /jellyfin.',
+      ],
+    },
+  },
+  {
+    version: '2.8.0',
+    headline: 'Check your Letterboxd login before you rely on it',
+    summary:
+      'Until now the Verify login button only worked for Serializd. For a Letterboxd account it said the login would be checked on the first sync, so a wrong password or a mistyped name went unnoticed until something quietly failed to appear on Letterboxd. Verify login now works for Letterboxd too: it signs in the same way syncing will and tells you whether it got in, and if not, the reason Letterboxd gave. It also catches a common mix-up: Letterboxd no longer lets you sign in with your email address, so Jellyscribe now asks for your Letterboxd username instead and explains why if you enter an email.',
+    highlights: {
+      new: [
+        'Verify login works for Letterboxd accounts, in both the admin dashboard and your own settings page, and shows which sign-in method worked or why it failed.',
+      ],
+      fixes: [
+        'Entering an email address as a Letterboxd account name is caught when you verify or save, with a clear message, instead of failing silently at the first sync.',
+      ],
+    },
+  },
+  {
+    version: '2.7.0',
+    headline: 'Ratings you give after watching now reach Letterboxd',
+    summary:
+      'Jellyscribe sends your rating along when it logs a film to your Letterboxd diary, and that happens the moment the credits roll. Most people rate afterwards, and until now those ratings never left Jellyfin: the film was already logged, so later syncs skipped it. Jellyscribe now notices when you change a film\'s rating and, about ten seconds after you settle on a score, sets it as your Letterboxd rating for that film. Jellyfin\'s own web app has no star rating, only favourites, so the usual way in is a review written with Jellyfin Enhanced 12.10 or later with its option to copy review stars into Jellyfin switched on; ratings from any other app that saves them to Jellyfin work too. Only real changes are sent: ratings already in Jellyfin when you update are left alone until you change them, and favouriting or rewatching a film leaves Letterboxd alone. If Letterboxd is briefly unreachable, the rating is retried a few times. As on Letterboxd itself, rating a film marks it watched and takes it off your watchlist. Clearing a rating in Jellyfin does not remove it from Letterboxd, and some apps, Infuse among them, keep ratings to themselves and never save them to Jellyfin, so those still cannot be synced. Each Letterboxd account has a new Sync ratings to Letterboxd switch, on by default.',
+    highlights: {
+      new: [
+        'Rating changes in Jellyfin are sent to your Letterboxd film rating within seconds, for films you have already logged and for ones you have not.',
+        'Reviews written with Jellyfin Enhanced 12.10 or later reach Letterboxd, once its option to copy review stars into Jellyfin is on. Jellyfin\'s own web app only has favourites, not star ratings.',
+        'A Sync ratings to Letterboxd switch on every Letterboxd account, in both the admin dashboard and your own settings page.',
+      ],
+      improvements: [
+        'Each rating sent shows up in the activity list as Rated, with the star value.',
+      ],
+    },
+  },
+  {
+    version: '2.6.0',
+    headline: 'Keep a whole library off Letterboxd or Serializd',
+    summary:
+      'Until now Jellyscribe sent every film and episode you finished to your linked accounts, whichever library it lived in. If you already track some of that somewhere else, anime on AniList for example, those watches were turning up on Letterboxd or Serializd as well, and the only way to stop it was to switch the whole account off. Each linked account now has an Excluded libraries list in its settings. Tick a library there and nothing from it is sent to that account, whether by the daily catch-up or the moment you finish watching. The setting is per account, so two people sharing a Jellyfin login can make different choices, and a library you leave unticked syncs exactly as before. Exclusion only applies from now on: anything already logged stays where it is, and diary import and watchlist sync still look at every library.',
+    highlights: {
+      new: [
+        'An Excluded libraries list on every Letterboxd and Serializd account, in both the admin dashboard and your own settings page.',
+        'Films and episodes from an excluded library are skipped by the daily catch-up and by real-time sync alike, and the server log notes how many were skipped.',
+      ],
+      improvements: [
+        'The library list only shows libraries you can actually see, and only the ones that hold films or TV.',
+      ],
+    },
+  },
+  {
+    version: '2.5.4',
+    headline: 'All of Jellyscribe\'s scheduled tasks now sit under one Jellyscribe heading',
+    summary:
+      'In Jellyfin\'s Scheduled Tasks page, most of Jellyscribe\'s tasks were still filed under a heading called Letterboxd, left over from before the plugin was renamed, while one sat under Jellyscribe. That even put the Serializd tasks for TV under Letterboxd. Every Jellyscribe task, film and TV alike, now appears together under Jellyscribe. Nothing about how or when the tasks run has changed.',
+    highlights: {
+      fixes: [
+        'Jellyscribe\'s scheduled tasks, including the Serializd ones, are grouped under a single Jellyscribe heading instead of being split across Letterboxd and Jellyscribe.',
+      ],
+    },
+  },
+  {
+    version: '2.5.3',
+    headline: 'Big watchlists and diaries now sync in full, not just the first hundred films',
+    summary:
+      'If your Letterboxd watchlist or your list of watched films was longer than about a hundred titles, Jellyscribe only ever saw the first hundred. A watchlist of a thousand films turned into a playlist of ninety-nine, and the diary import only marked your first hundred watched films as played. The fix shipped in 2.4.0 for this did not hold: it asked Letterboxd for the next page in a way Letterboxd quietly ignores, so every request came back with the first page again and nothing warned that anything was missing. Jellyscribe now asks for each page exactly the way Letterboxd expects, so the whole list comes through, and if Letterboxd ever stops handing over new pages, the sync stops, says so in the log, and leaves your playlist exactly as it was instead of quietly shrinking it. Run a watchlist sync after updating and your playlist will fill in with everything that was missing.',
+    highlights: {
+      fixes: [
+        'Watchlist sync fetches every film on watchlists longer than a hundred, instead of stopping at the first page.',
+        'Diary import marks every watched film as played, not only the first hundred.',
+      ],
+      improvements: [
+        'If a list cannot be read in full, the sync stops with a clear error in the log and changes nothing, rather than quietly working from a short list.',
+        'Short lists finish in a single request instead of repeating it dozens of times.',
+      ],
+    },
+  },
+  {
+    version: '2.5.2',
+    headline: 'The Raw cookies box no longer vanishes if you use an ad blocker',
+    summary:
+      'If you run Ghostery, uBlock Origin with annoyance lists, AdGuard or Brave shields, the Raw cookies field in the account settings could simply not appear. The label was there, the box was not, and nothing showed up in the browser console to explain it. The cause was on our side: the field was named with the word "cookie" in it, and blockers carry sweeping rules that hide anything named that way in order to kill cookie consent banners. Ours got caught in the net. The field has been renamed internally so blockers leave it alone, and it still reads Raw cookies on screen. This mattered more than it sounds, because pasting cookies is exactly what we recommend when Cloudflare or two-factor authentication blocks a normal password login, so the people most in need of that box were the ones least likely to see it.',
+    highlights: {
+      fixes: [
+        'The Raw cookies field now appears for everyone, including users running content blockers that were silently hiding it.',
+      ],
+      improvements: [
+        'A test now fails the build if any settings field is named in a way content blockers are known to hide, so this cannot quietly come back.',
+      ],
+    },
+  },
+  {
+    version: '2.5.1',
+    headline: 'Serializd diary import no longer stops at the first season review',
+    summary:
+      'Importing your Serializd diary could fail outright with a confusing error about an element of type Number. The cause was that Serializd diaries contain reviews of whole seasons and whole shows, not just individual episodes, and those entries carry no episode number. Jellyscribe tried to read one anyway and the whole import stopped there, so nothing was imported at all. Those entries are not episode watches, so they are now simply skipped and the rest of the diary imports normally. If your Serializd import has been failing, it should work on the next run with no changes needed at your end.',
+    highlights: {
+      fixes: [
+        'Serializd diary import no longer fails when the diary contains season-level or show-level reviews, which carry no episode number.',
+        'The same fix covers other places a Serializd response can legitimately leave a number empty, so one unusual entry can no longer stop an entire import.',
+      ],
+    },
+  },
+  {
+    version: '2.5.0',
+    headline: 'Watchlist playlists work on Jellyfin 12',
+    summary:
+      'Jellyfin 12 changed the way plugins add items to a playlist, and Jellyscribe was still asking the old way. The result was that on Jellyfin 12 your watchlist playlist silently stopped being filled in, while everything else carried on working normally. Jellyscribe now detects which version of that API the server offers and uses the right one, so a single release keeps working on Jellyfin 10.11 and Jellyfin 12 alike. If you are on Jellyfin 12 and your watchlist playlist has been sitting empty or stale, this release fixes it and the next watchlist sync will fill it in. Jellyfin 12 is now explicitly supported.',
+    highlights: {
+      fixes: [
+        'Watchlist-to-playlist sync works again on Jellyfin 12. It had been failing silently since Jellyfin 12.0 changed the playlist API.',
+      ],
+      new: [
+        'Jellyfin 12.x is now explicitly supported from the same release that serves Jellyfin 10.11.9 and newer.',
+      ],
+      improvements: [
+        'Every change is now built and tested against the Jellyfin 12 SDK automatically, so this class of breakage is caught before it ships rather than in a bug report.',
+      ],
+    },
+  },
+  {
+    version: '2.4.2',
+    headline: 'Fixing a bad Letterboxd password actually un-pauses syncing again',
+    summary:
+      'When a Letterboxd login fails three times in a row, Jellyscribe pauses that account and shows "Login failing, sync paused". Correcting the password was supposed to clear that and resume on the next run. It did if you edited the account from the user page, but not from the admin dashboard, because those two save through different paths and only one of them reset the pause. Admins were left stuck: the password was right, the badge still said failing, and even deleting the account and adding it again changed nothing, because the paused state is remembered per Letterboxd username and a new account simply inherited it. Saving an account from the dashboard now clears the pause whenever its password or cookies changed, so a corrected login is retried on the next sync.',
+    highlights: {
+      fixes: [
+        'Correcting a Letterboxd password or cookies in the admin dashboard now clears "Login failing, sync paused" instead of leaving the account stuck indefinitely.',
+        'Re-creating an account that was previously paused no longer inherits the old paused state.',
+      ],
+      improvements: [
+        'Saving unrelated settings still leaves a paused account paused, so the protection against hammering Letterboxd with a known-bad password is unchanged.',
+      ],
+    },
+  },
+  {
+    version: '2.4.1',
+    headline: 'Seerr requests that were already stuck now get unstuck',
+    summary:
+      'Version 2.4.0 made sure new Seerr requests get approved so they actually reach Radarr and Sonarr. It did nothing for requests that were already sitting in Seerr waiting for approval, which for anyone who had been hit by the problem was most of them. The reason is that Jellyscribe skips any title Seerr already has a request for, so those requests were never looked at again and nothing ever approved them. Upgrading appeared to change nothing at all. Jellyscribe now checks for watchlist titles left waiting for approval and approves those too, so an existing backlog clears itself on the next watchlist sync instead of needing to be worked through by hand.',
+    highlights: {
+      fixes: [
+        'Seerr requests left waiting for approval by an earlier version are now approved on the next watchlist sync, so a backlog that never reached Radarr or Sonarr clears itself.',
+      ],
+      improvements: [
+        'Only requests belonging to the synced user, for titles on the watchlist just synced, are touched. Anything else awaiting your approval in Seerr is left alone.',
+        'Turning off "Auto-approve requests created by Jellyscribe" also leaves the existing backlog untouched.',
+      ],
+    },
+  },
+  {
+    version: '2.4.0',
+    headline: 'Your whole watchlist syncs, and Seerr requests actually reach Radarr',
+    summary:
+      'Two problems that quietly cut the watchlist feature off at the knees. Large watchlists only ever synced their first hundred films: the plugin asked Letterboxd for the next page using the wrong field name, so it always concluded there was nothing more to fetch and stopped. Everything past the first page simply never arrived. Separately, watchlist titles sent to Seerr were created but never downloaded. Seerr only hands a request to Radarr or Sonarr once it is approved, and it decides that from the permissions of the person the request belongs to, not from the admin API key the plugin uses, so requests for anyone without auto-approve sat in the pending queue forever. Jellyscribe now approves the requests it creates, and there is a switch in the Seerr settings to turn that off if you would rather review them yourself.',
+    highlights: {
+      fixes: [
+        'Watchlists longer than one page now sync in full. Previously only the first 100 films were ever imported, no matter how large the watchlist.',
+        'Titles auto-requested through Seerr now reach Radarr and Sonarr instead of sitting in the pending queue and never downloading.',
+      ],
+      new: [
+        'A new "Auto-approve requests created by Jellyscribe" option in the Seerr settings, on by default. Switch it off to keep plugin-created requests in Seerr\'s manual approval queue.',
+      ],
+      improvements: [
+        'When a request cannot be approved, the log now says so plainly, and names the reason it will not reach Radarr, rather than reporting a silent success.',
+      ],
+    },
+  },
+  {
     version: '2.3.1',
     headline: 'Manually marking something watched no longer logs it to 1970',
     summary:

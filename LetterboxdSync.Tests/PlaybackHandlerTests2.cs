@@ -32,6 +32,7 @@ public class PlaybackHandlerEarlyExitTests : IDisposable
     private readonly string _tempDir;
     private readonly ISessionManager _sessionManager;
     private readonly IUserDataManager _userDataManager;
+    private readonly ILibraryManager _libraryManager = Substitute.For<ILibraryManager>();
     private readonly PlaybackHandler _handler;
 
     public PlaybackHandlerEarlyExitTests()
@@ -54,7 +55,7 @@ public class PlaybackHandlerEarlyExitTests : IDisposable
 
         _sessionManager = Substitute.For<ISessionManager>();
         _userDataManager = Substitute.For<IUserDataManager>();
-        _handler = new PlaybackHandler(_sessionManager, _userDataManager,
+        _handler = new PlaybackHandler(_sessionManager, _userDataManager, _libraryManager,
             new LoggerFactory().CreateLogger<PlaybackHandler>());
     }
 
@@ -343,5 +344,48 @@ public class PlaybackHandlerEarlyExitTests : IDisposable
         });
 
         Assert.Equal(4.0, capturedRating);
+    }
+
+    // ----- Library exclusion (issue #124) -----
+
+    [Fact]
+    public async Task FilmInExcludedLibrary_SkipsOnlyTheExcludingAccount()
+    {
+        var animeLibraryId = Guid.Parse("0c5b2a1e9f3d4c7a8b6e5d4c3b2a1f0e");
+        var (user, userId) = MakeUser("lachlan");
+        Plugin.Instance!.Configuration.Accounts.Add(new Account
+        {
+            UserJellyfinId = userId,
+            LetterboxdUsername = "lb-excludes",
+            LetterboxdPassword = "secret",
+            Enabled = true,
+            ExcludedLibraryIds = { animeLibraryId.ToString("N") }
+        });
+        Plugin.Instance!.Configuration.Accounts.Add(new Account
+        {
+            UserJellyfinId = userId,
+            LetterboxdUsername = "lb-keeps",
+            LetterboxdPassword = "secret",
+            Enabled = true
+        });
+        var movie = MakeMovie(name: "Perfect Blue");
+        _libraryManager.GetCollectionFolders(movie)
+            .Returns(new List<Folder> { new CollectionFolder { Id = animeLibraryId } });
+
+        var authedAs = new List<string>();
+        LetterboxdServiceFactory.OverrideForTesting = (username, _, _, _, _) =>
+        {
+            authedAs.Add(username);
+            return Task.FromResult(Substitute.For<ILetterboxdService>());
+        };
+
+        await _handler.HandlePlaybackStoppedAsync(new PlaybackStopEventArgs
+        {
+            Item = movie,
+            PlayedToCompletion = true,
+            Users = new List<User> { user }
+        });
+
+        Assert.Equal(new[] { "lb-keeps" }, authedAs);
     }
 }

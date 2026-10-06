@@ -594,4 +594,53 @@ public class SerializdControllerTests : IDisposable
         Assert.NotNull(_controller.LastBackgroundSync);
         await _controller.LastBackgroundSync!;
     }
+
+    // ----- Excluded libraries (issue #124) -----
+
+    [Fact]
+    public void PutAccounts_StoresExcludedLibraryIds_AndGetAccountsEchoesThem()
+    {
+        var (_, idHex) = AddUserWithAccount();
+        Authenticate(idHex);
+        const string anime = "0c5b2a1e9f3d4c7a8b6e5d4c3b2a1f0e";
+
+        var result = _controller.PutAccounts(new SerializdController.AccountsUpdateRequest
+        {
+            Accounts = new()
+            {
+                new SerializdController.AccountItem
+                {
+                    Email = "user@example.com",
+                    Enabled = true,
+                    ExcludedLibraryIds = new() { anime, "0c5b2a1e-9f3d-4c7a-8b6e-5d4c3b2a1f0e", "junk" },
+                },
+            }
+        });
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Equal(new[] { anime },
+            Plugin.Instance!.Configuration.SerializdAccounts.Single(a => a.UserJellyfinId == idHex).ExcludedLibraryIds);
+
+        var get = _controller.GetAccounts();
+        var echoed = Prop<System.Collections.IEnumerable>(get, "accounts")!.Cast<object>().Single();
+        Assert.Equal(new[] { anime },
+            (IEnumerable<string>)echoed.GetType().GetProperty("excludedLibraryIds")!.GetValue(echoed)!);
+    }
+
+    [Fact]
+    public void PutAccounts_OmittedExcludedLibraryIds_KeepsStoredList()
+    {
+        var (_, idHex) = AddUserWithAccount(email: "User@Example.com");
+        const string anime = "0c5b2a1e9f3d4c7a8b6e5d4c3b2a1f0e";
+        Plugin.Instance!.Configuration.SerializdAccounts.Single(a => a.UserJellyfinId == idHex).ExcludedLibraryIds.Add(anime);
+        Authenticate(idHex);
+
+        _controller.PutAccounts(new SerializdController.AccountsUpdateRequest
+        {
+            Accounts = new() { new SerializdController.AccountItem { Email = "user@example.com", Enabled = true } }
+        });
+
+        Assert.Equal(new[] { anime },
+            Plugin.Instance!.Configuration.SerializdAccounts.Single(a => a.UserJellyfinId == idHex).ExcludedLibraryIds);
+    }
 }

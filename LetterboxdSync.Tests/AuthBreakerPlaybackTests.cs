@@ -54,6 +54,7 @@ public class AuthBreakerPlaybackTests : IDisposable
         _handler = new PlaybackHandler(
             Substitute.For<ISessionManager>(),
             Substitute.For<IUserDataManager>(),
+            Substitute.For<ILibraryManager>(),
             new LoggerFactory().CreateLogger<PlaybackHandler>());
     }
 

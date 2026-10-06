@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text.Json.Serialization;
 using System.Xml.Serialization;
 using LetterboxdSync.Security;
@@ -84,4 +85,7 @@ public class SerializdAccount
     /// defaults to "Serializd Watchlist". Mirrors <see cref="Account.PlaylistName"/>.
     /// </summary>
     public string? WatchlistName { get; set; }
+
+    /// <summary>Libraries whose episodes this account never exports. Mirrors <see cref="Account.ExcludedLibraryIds"/>.</summary>
+    public List<string> ExcludedLibraryIds { get; set; } = new List<string>();
 }

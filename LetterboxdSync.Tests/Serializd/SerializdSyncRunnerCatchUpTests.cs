@@ -445,4 +445,71 @@ public class SerializdSyncRunnerCatchUpTests : IDisposable
         await service.Received(1).CreateEpisodeLogAsync(
             Arg.Any<int>(), Arg.Any<int>(), 2, Arg.Any<DateTime>(), Arg.Any<int?>(), Arg.Any<bool>());
     }
+
+    // ----- Library exclusion (issue #124) -----
+
+    private static readonly Guid AnimeLibraryId = Guid.Parse("0c5b2a1e9f3d4c7a8b6e5d4c3b2a1f0e");
+
+    private void ExcludeOnAccount(Guid libraryId)
+        => Plugin.Instance!.Configuration.SerializdAccounts[0].ExcludedLibraryIds.Add(libraryId.ToString("N"));
+
+    private void InLibrary(Guid libraryId, params Episode[] episodes)
+    {
+        foreach (var ep in episodes)
+            _libraryManager.GetCollectionFolders(ep).Returns(new List<Folder> { new CollectionFolder { Id = libraryId } });
+    }
+
+    [Fact]
+    public async Task Run_EpisodesInExcludedLibrary_NeverLoggedAndNoAuth()
+    {
+        var (user, _) = AddUserWithAccount();
+        ExcludeOnAccount(AnimeLibraryId);
+        var seriesId = Guid.NewGuid();
+        var e1 = MakeEpisode(1, 1);
+        var e2 = MakeEpisode(1, 2);
+        var e3 = MakeEpisode(1, 3);
+        foreach (var ep in new[] { e1, e2, e3 })
+        {
+            ep.SeriesId = seriesId;
+            _userDataManager.GetUserData(user, ep).Returns(MakeUserData(DateTime.UtcNow.AddHours(-1)));
+        }
+        LibraryHas(e1, e2, e3);
+        InLibrary(AnimeLibraryId, e1, e2, e3);
+        var factoryHit = false;
+        SerializdServiceFactory.OverrideForTesting = (_, _, _) =>
+        {
+            factoryHit = true;
+            return Task.FromResult(Substitute.For<ISerializdService>());
+        };
+
+        await _runner.RunForAllAsync(new Progress<double>(), "test", CancellationToken.None);
+
+        Assert.False(factoryHit);
+        // One library lookup for the whole series, not one per episode.
+        _libraryManager.Received(1).GetCollectionFolders(Arg.Any<BaseItem>());
+    }
+
+    [Fact]
+    public async Task Run_ExcludingAccount_StillLogsEpisodesFromOtherLibraries()
+    {
+        var (user, _) = AddUserWithAccount();
+        ExcludeOnAccount(AnimeLibraryId);
+        var anime = MakeEpisode(1, 1);
+        anime.SeriesId = Guid.NewGuid();
+        // SeriesId left empty on the logged episode: a set SeriesId makes ep.Series resolve through
+        // Jellyfin's static BaseItem.LibraryManager, which is not wired in unit tests. This also
+        // covers the uncached lookup path.
+        var drama = MakeEpisode(2, 5);
+        _userDataManager.GetUserData(user, anime).Returns(MakeUserData(DateTime.UtcNow.AddHours(-1)));
+        _userDataManager.GetUserData(user, drama).Returns(MakeUserData(DateTime.UtcNow.AddHours(-1)));
+        LibraryHas(anime, drama);
+        InLibrary(AnimeLibraryId, anime);
+        InLibrary(Guid.NewGuid(), drama);
+        var service = FakeService(out var logged);
+
+        await _runner.RunForAllAsync(new Progress<double>(), "test", CancellationToken.None);
+
+        Assert.Equal(new[] { (ShowTmdbId, 502, 5) }, logged);
+        await service.Received(1).LogEpisodesAsync(ShowTmdbId, 502, Arg.Is<IReadOnlyList<int>>(l => l.Count == 1 && l[0] == 5));
+    }
 }

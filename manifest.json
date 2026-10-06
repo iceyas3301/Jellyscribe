@@ -8,6 +8,110 @@
     "category": "General",
     "versions": [
       {
+        "version": "2.10.0.0",
+        "changelog": "Clicking Jellyscribe used to reload the whole Jellyfin web app and drop you onto a plugin settings page. It now opens as a proper page inside Jellyfin, the way Jellyfin Enhanced's Bookmarks does: no reload, Jellyfin's header and menu stay put, and the back button takes you straight back to where you were. You can also bookmark it, since it has its own address ending in #/jellyscribe. On Jellyfin 12, where the sidebar was replaced by a menu under your profile picture, Jellyscribe now appears in that menu, so it is reachable there for the first time. Everything on the page works as before, and the old settings-page address still works.",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://lbsync-telemetry.lachlanbyoung.workers.dev/dl/v2.10.0/jellyfin-plugin-letterboxd-v2.10.0.zip",
+        "checksum": "4a423985f6bc2ccc4214b7e1bbf9fd7f",
+        "timestamp": "2026-10-05T06:18:38Z"
+      },
+      {
+        "version": "2.9.0.0",
+        "changelog": "The Jellyscribe link in Jellyfin's sidebar used to appear only if you had also installed the File Transformation plugin, so many people never saw it and had to dig through the dashboard to find their settings. Jellyscribe now adds the link itself, the same way Jellyfin Enhanced adds its own menu, and nothing on your server's disk is changed. If you already use File Transformation, nothing changes for you and you still get exactly one link. The link also now works on servers that run Jellyfin under a sub-path such as /jellyfin, where it used to point at the wrong address. On Jellyfin 12, the web client moved its menu into the profile button, so the link doesn't show there yet; open Jellyscribe from Dashboard, Plugins instead.",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://lbsync-telemetry.lachlanbyoung.workers.dev/dl/v2.9.0/jellyfin-plugin-letterboxd-v2.9.0.zip",
+        "checksum": "26997ffd96997b3b156f1dca4896ceb7",
+        "timestamp": "2026-10-05T06:13:22Z"
+      },
+      {
+        "version": "2.8.0.0",
+        "changelog": "Until now the Verify login button only worked for Serializd. For a Letterboxd account it said the login would be checked on the first sync, so a wrong password or a mistyped name went unnoticed until something quietly failed to appear on Letterboxd. Verify login now works for Letterboxd too: it signs in the same way syncing will and tells you whether it got in, and if not, the reason Letterboxd gave. It also catches a common mix-up: Letterboxd no longer lets you sign in with your email address, so Jellyscribe now asks for your Letterboxd username instead and explains why if you enter an email.",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://lbsync-telemetry.lachlanbyoung.workers.dev/dl/v2.8.0/jellyfin-plugin-letterboxd-v2.8.0.zip",
+        "checksum": "bbd999902c5404a920414798e4c20346",
+        "timestamp": "2026-10-05T06:08:28Z"
+      },
+      {
+        "version": "2.7.0.0",
+        "changelog": "Jellyscribe sends your rating along when it logs a film to your Letterboxd diary, and that happens the moment the credits roll. Most people rate afterwards, and until now those ratings never left Jellyfin: the film was already logged, so later syncs skipped it. Jellyscribe now notices when you change a film's rating and, about ten seconds after you settle on a score, sets it as your Letterboxd rating for that film. Jellyfin's own web app has no star rating, only favourites, so the usual way in is a review written with Jellyfin Enhanced 12.10 or later with its option to copy review stars into Jellyfin switched on; ratings from any other app that saves them to Jellyfin work too. Only real changes are sent: ratings already in Jellyfin when you update are left alone until you change them, and favouriting or rewatching a film leaves Letterboxd alone. If Letterboxd is briefly unreachable, the rating is retried a few times. As on Letterboxd itself, rating a film marks it watched and takes it off your watchlist. Clearing a rating in Jellyfin does not remove it from Letterboxd, and some apps, Infuse among them, keep ratings to themselves and never save them to Jellyfin, so those still cannot be synced. Each Letterboxd account has a new Sync ratings to Letterboxd switch, on by default.",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://lbsync-telemetry.lachlanbyoung.workers.dev/dl/v2.7.0/jellyfin-plugin-letterboxd-v2.7.0.zip",
+        "checksum": "8714f1777689c6a683dffddfdf4bbd2c",
+        "timestamp": "2026-10-05T05:59:09Z"
+      },
+      {
+        "version": "2.6.0.0",
+        "changelog": "Until now Jellyscribe sent every film and episode you finished to your linked accounts, whichever library it lived in. If you already track some of that somewhere else, anime on AniList for example, those watches were turning up on Letterboxd or Serializd as well, and the only way to stop it was to switch the whole account off. Each linked account now has an Excluded libraries list in its settings. Tick a library there and nothing from it is sent to that account, whether by the daily catch-up or the moment you finish watching. The setting is per account, so two people sharing a Jellyfin login can make different choices, and a library you leave unticked syncs exactly as before. Exclusion only applies from now on: anything already logged stays where it is, and diary import and watchlist sync still look at every library.",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://lbsync-telemetry.lachlanbyoung.workers.dev/dl/v2.6.0/jellyfin-plugin-letterboxd-v2.6.0.zip",
+        "checksum": "8d27cfbad84b2efa344b158e83daf6e2",
+        "timestamp": "2026-10-03T06:53:28Z"
+      },
+      {
+        "version": "2.5.4.0",
+        "changelog": "In Jellyfin's Scheduled Tasks page, most of Jellyscribe's tasks were still filed under a heading called Letterboxd, left over from before the plugin was renamed, while one sat under Jellyscribe. That even put the Serializd tasks for TV under Letterboxd. Every Jellyscribe task, film and TV alike, now appears together under Jellyscribe. Nothing about how or when the tasks run has changed.",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://lbsync-telemetry.lachlanbyoung.workers.dev/dl/v2.5.4/jellyfin-plugin-letterboxd-v2.5.4.zip",
+        "checksum": "f97742db687a643dd4b650500859c584",
+        "timestamp": "2026-10-03T06:42:23Z"
+      },
+      {
+        "version": "2.5.3.0",
+        "changelog": "If your Letterboxd watchlist or your list of watched films was longer than about a hundred titles, Jellyscribe only ever saw the first hundred. A watchlist of a thousand films turned into a playlist of ninety-nine, and the diary import only marked your first hundred watched films as played. The fix shipped in 2.4.0 for this did not hold: it asked Letterboxd for the next page in a way Letterboxd quietly ignores, so every request came back with the first page again and nothing warned that anything was missing. Jellyscribe now asks for each page exactly the way Letterboxd expects, so the whole list comes through, and if Letterboxd ever stops handing over new pages, the sync stops, says so in the log, and leaves your playlist exactly as it was instead of quietly shrinking it. Run a watchlist sync after updating and your playlist will fill in with everything that was missing.",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://lbsync-telemetry.lachlanbyoung.workers.dev/dl/v2.5.3/jellyfin-plugin-letterboxd-v2.5.3.zip",
+        "checksum": "97a93b50b8e94a7dd0ca31d1e9ae078b",
+        "timestamp": "2026-10-03T06:36:42Z"
+      },
+      {
+        "version": "2.5.2.0",
+        "changelog": "If you run Ghostery, uBlock Origin with annoyance lists, AdGuard or Brave shields, the Raw cookies field in the account settings could simply not appear. The label was there, the box was not, and nothing showed up in the browser console to explain it. The cause was on our side: the field was named with the word \"cookie\" in it, and blockers carry sweeping rules that hide anything named that way in order to kill cookie consent banners. Ours got caught in the net. The field has been renamed internally so blockers leave it alone, and it still reads Raw cookies on screen. This mattered more than it sounds, because pasting cookies is exactly what we recommend when Cloudflare or two-factor authentication blocks a normal password login, so the people most in need of that box were the ones least likely to see it.",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://lbsync-telemetry.lachlanbyoung.workers.dev/dl/v2.5.2/jellyfin-plugin-letterboxd-v2.5.2.zip",
+        "checksum": "a0d5342e634defdf6d72b2d669a1b55b",
+        "timestamp": "2026-09-17T02:39:10Z"
+      },
+      {
+        "version": "2.5.1.0",
+        "changelog": "Importing your Serializd diary could fail outright with a confusing error about an element of type Number. The cause was that Serializd diaries contain reviews of whole seasons and whole shows, not just individual episodes, and those entries carry no episode number. Jellyscribe tried to read one anyway and the whole import stopped there, so nothing was imported at all. Those entries are not episode watches, so they are now simply skipped and the rest of the diary imports normally. If your Serializd import has been failing, it should work on the next run with no changes needed at your end.",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://lbsync-telemetry.lachlanbyoung.workers.dev/dl/v2.5.1/jellyfin-plugin-letterboxd-v2.5.1.zip",
+        "checksum": "e87bff2b5554a6cadbcdc426af477804",
+        "timestamp": "2026-09-16T01:45:04Z"
+      },
+      {
+        "version": "2.5.0.0",
+        "changelog": "Jellyfin 12 changed the way plugins add items to a playlist, and Jellyscribe was still asking the old way. The result was that on Jellyfin 12 your watchlist playlist silently stopped being filled in, while everything else carried on working normally. Jellyscribe now detects which version of that API the server offers and uses the right one, so a single release keeps working on Jellyfin 10.11 and Jellyfin 12 alike. If you are on Jellyfin 12 and your watchlist playlist has been sitting empty or stale, this release fixes it and the next watchlist sync will fill it in. Jellyfin 12 is now explicitly supported.",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://lbsync-telemetry.lachlanbyoung.workers.dev/dl/v2.5.0/jellyfin-plugin-letterboxd-v2.5.0.zip",
+        "checksum": "1073c8cd9a3cc50c11189789616da0d7",
+        "timestamp": "2026-09-16T01:21:09Z"
+      },
+      {
+        "version": "2.4.2.0",
+        "changelog": "When a Letterboxd login fails three times in a row, Jellyscribe pauses that account and shows \"Login failing, sync paused\". Correcting the password was supposed to clear that and resume on the next run. It did if you edited the account from the user page, but not from the admin dashboard, because those two save through different paths and only one of them reset the pause. Admins were left stuck: the password was right, the badge still said failing, and even deleting the account and adding it again changed nothing, because the paused state is remembered per Letterboxd username and a new account simply inherited it. Saving an account from the dashboard now clears the pause whenever its password or cookies changed, so a corrected login is retried on the next sync.",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://lbsync-telemetry.lachlanbyoung.workers.dev/dl/v2.4.2/jellyfin-plugin-letterboxd-v2.4.2.zip",
+        "checksum": "91b3acfc68c839e17776a81b0537be92",
+        "timestamp": "2026-09-16T01:04:19Z"
+      },
+      {
+        "version": "2.4.1.0",
+        "changelog": "Version 2.4.0 made sure new Seerr requests get approved so they actually reach Radarr and Sonarr. It did nothing for requests that were already sitting in Seerr waiting for approval, which for anyone who had been hit by the problem was most of them. The reason is that Jellyscribe skips any title Seerr already has a request for, so those requests were never looked at again and nothing ever approved them. Upgrading appeared to change nothing at all. Jellyscribe now checks for watchlist titles left waiting for approval and approves those too, so an existing backlog clears itself on the next watchlist sync instead of needing to be worked through by hand.",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://lbsync-telemetry.lachlanbyoung.workers.dev/dl/v2.4.1/jellyfin-plugin-letterboxd-v2.4.1.zip",
+        "checksum": "a8c2fb3e9ebfed2119058edf28b5a8bb",
+        "timestamp": "2026-09-15T23:54:48Z"
+      },
+      {
+        "version": "2.4.0.0",
+        "changelog": "Two problems that quietly cut the watchlist feature off at the knees. Large watchlists only ever synced their first hundred films, because the plugin asked Letterboxd for the next page using the wrong field name and so always concluded there was nothing more to fetch. Everything past the first page simply never arrived. Separately, watchlist titles sent to Seerr were created but never downloaded: Seerr only hands a request to Radarr or Sonarr once it has been approved, and it decides that from the permissions of the person the request belongs to rather than the admin API key the plugin uses, so requests for anyone without auto-approve sat in the pending queue forever. Jellyscribe now approves the requests it creates, and a new switch in the Seerr settings turns that off if you would rather review them yourself.",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://lbsync-telemetry.lachlanbyoung.workers.dev/dl/v2.4.0/jellyfin-plugin-letterboxd-v2.4.0.zip",
+        "checksum": "922942006526e86c83f4e0c34de92bed",
+        "timestamp": "2026-09-15T23:30:29Z"
+      },
+      {
         "version": "2.3.1.0",
         "changelog": "Films and episodes that Jellyfin marks watched through real playback have always synced with the correct date. But checking a title watched by hand, using the checkmark rather than actually playing it, could leave Jellyfin's own watched-date field set to January 1st 1970 instead of a real date, and the plugin trusted that value as-is. The fix treats an epoch-adjacent watched date the same way it already treats a missing one: there's no real watch date to log yet, so the sync waits rather than posting a bogus entry to Letterboxd or Serializd. Once Jellyfin records an actual playback date for the title, it syncs normally.",
         "targetAbi": "10.11.9.0",

@@ -11,6 +11,13 @@ public class PluginConfiguration : BasePluginConfiguration
     public List<Account> Accounts { get; set; } = new List<Account>();
 
     /// <summary>
+    /// Kill switch for <see cref="SidebarScriptStartupFilter"/>, the request-time injection that
+    /// adds the sidebar link without the File Transformation plugin. No dashboard control: set it
+    /// in the plugin's XML config if the injection ever conflicts with another plugin.
+    /// </summary>
+    public bool DisableSidebarScriptMiddleware { get; set; }
+
+    /// <summary>
     /// Serializd (TV) account links, one or more per Jellyfin user. Independent of
     /// <see cref="Accounts"/> (Letterboxd/film); a user can link either, both, or neither.
     /// </summary>
@@ -36,6 +43,23 @@ public class PluginConfiguration : BasePluginConfiguration
         get => SecretProtector.Protect(JellyseerrApiKey);
         set => JellyseerrApiKey = SecretProtector.Unprotect(value);
     }
+
+    /// <summary>
+    /// Approve the requests this plugin creates in Seerr, so they actually reach Radarr/Sonarr.
+    /// <para>
+    /// Seerr decides auto-approval from the permissions of the user a request is attributed to,
+    /// not from the API key used to create it. A request attributed to a Seerr user without
+    /// "Auto-Approve" is therefore created as PENDING and never handed to Radarr, even though the
+    /// API key belongs to an admin. That is issue #110: requests show up in Seerr but nothing
+    /// downloads. With this on, the plugin follows a PENDING request with
+    /// POST /api/v1/request/{id}/approve using the admin API key.
+    /// </para>
+    /// <para>
+    /// Defaults to true: enabling per-account auto-request already expresses "go and fetch these".
+    /// Turn it off to keep plugin-created requests in Seerr's manual approval queue.
+    /// </para>
+    /// </summary>
+    public bool AutoApproveJellyseerrRequests { get; set; } = true;
 
     /// <summary>
     /// Anonymous opt-in usage telemetry state. Off by default; nothing is ever sent

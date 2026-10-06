@@ -29,7 +29,7 @@ public class EnhancedReviewSyncTask : IScheduledTask
         "Posts reviews and ratings written in Jellyfin Enhanced to the matching Letterboxd (films) " +
         "or Serializd (TV) diary. No-op unless enabled in the plugin's Integrations settings.";
 
-    public string Category => "Letterboxd";
+    public string Category => "Jellyscribe";
 
     public Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
         => _runner.RunAsync(progress, cancellationToken);

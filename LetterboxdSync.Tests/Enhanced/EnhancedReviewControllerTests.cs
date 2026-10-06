@@ -287,6 +287,9 @@ public class EnhancedReviewControllerTests : IDisposable
         public Task UpdateLogEntryAsync(string logEntryId, string? reviewText, bool containsSpoilers, double? rating)
             => Task.CompletedTask;
 
+        public Task SetFilmRatingAsync(string filmSlug, string filmId, double rating)
+            => Task.CompletedTask;
+
         public Task MarkAsWatchedAsync(string filmSlug, string filmId, DateTime? date, bool liked,
             string? productionId = null, bool rewatch = false, double? rating = null)
             => Task.CompletedTask;

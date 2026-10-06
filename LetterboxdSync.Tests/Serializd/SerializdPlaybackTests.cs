@@ -28,6 +28,7 @@ namespace LetterboxdSync.Tests.Serializd;
 public class SerializdPlaybackTests : IDisposable
 {
     private readonly string _tempDir;
+    private readonly ILibraryManager _libraryManager = Substitute.For<ILibraryManager>();
     private readonly PlaybackHandler _handler;
 
     public SerializdPlaybackTests()
@@ -48,6 +49,7 @@ public class SerializdPlaybackTests : IDisposable
         _handler = new PlaybackHandler(
             Substitute.For<ISessionManager>(),
             Substitute.For<IUserDataManager>(),
+            _libraryManager,
             new LoggerFactory().CreateLogger<PlaybackHandler>());
 
         // Isolate the dated-log dedup history and activity feed to this test's temp dir.
@@ -251,5 +253,56 @@ public class SerializdPlaybackTests : IDisposable
         });
 
         Assert.False(serializdHit);
+    }
+
+    // ----- Library exclusion (issue #124) -----
+
+    [Fact]
+    public async Task EpisodeInExcludedLibrary_SkipsOnlyTheExcludingAccount()
+    {
+        var animeLibraryId = Guid.Parse("0c5b2a1e9f3d4c7a8b6e5d4c3b2a1f0e");
+        var (user, idHex) = MakeUser();
+        Plugin.Instance!.Configuration.SerializdAccounts.Add(new SerializdAccount
+        {
+            UserJellyfinId = idHex,
+            Email = "excludes@example.com",
+            Password = "pw",
+            Enabled = true,
+            ExcludedLibraryIds = { animeLibraryId.ToString("N") },
+        });
+        Plugin.Instance!.Configuration.SerializdAccounts.Add(new SerializdAccount
+        {
+            UserJellyfinId = idHex,
+            Email = "keeps@example.com",
+            Password = "pw",
+            Enabled = true,
+        });
+        PlaybackHandler.SeriesTmdbIdReader = _ => 1396;
+        var episode = MakeEpisode(1, 4);
+        _libraryManager.GetCollectionFolders(episode)
+            .Returns(new List<MediaBrowser.Controller.Entities.Folder>
+            {
+                new MediaBrowser.Controller.Entities.CollectionFolder { Id = animeLibraryId }
+            });
+
+        var authedAs = new List<string>();
+        var svc = Substitute.For<ISerializdService>();
+        svc.ResolveSeasonIdAsync(1396, 1).Returns(Task.FromResult<int?>(3572));
+        SerializdServiceFactory.OverrideForTesting = (email, _, _) =>
+        {
+            authedAs.Add(email);
+            return Task.FromResult(svc);
+        };
+
+        await _handler.HandlePlaybackStoppedAsync(new PlaybackStopEventArgs
+        {
+            Item = episode,
+            PlayedToCompletion = true,
+            Users = new List<User> { user },
+        });
+
+        Assert.Equal(new[] { "keeps@example.com" }, authedAs);
+        await svc.Received(1).LogEpisodesAsync(1396, 3572,
+            Arg.Is<IReadOnlyList<int>>(l => l.Count == 1 && l[0] == 4));
     }
 }

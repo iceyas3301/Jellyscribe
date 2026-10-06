@@ -16,6 +16,12 @@ public class AccountUpdateRequest
 
     public bool SyncFavorites { get; set; }
 
+    /// <summary>
+    /// Null means the client did not send the field: PutAccount and PutAccounts then keep the
+    /// stored value, and a new account gets the default (on).
+    /// </summary>
+    public bool? SyncRatings { get; set; }
+
     public bool EnableDateFilter { get; set; }
 
     public int DateFilterDays { get; set; } = 7;
@@ -37,6 +43,12 @@ public class AccountUpdateRequest
     public bool IsPrimary { get; set; }
 
     public string? PlaylistName { get; set; }
+
+    /// <summary>
+    /// Library ids this account never exports. Null means the client did not send the field, and
+    /// both PutAccount and PutAccounts then keep the account's stored list.
+    /// </summary>
+    public List<string>? ExcludedLibraryIds { get; set; }
 }
 
 /// <summary>

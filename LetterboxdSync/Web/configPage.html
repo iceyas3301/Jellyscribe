@@ -84,7 +84,8 @@
                 #letterboxdSyncConfigPage .ws-chip.on[data-f="serializd"] { border-color: var(--ws-tv); background: var(--ws-tv-soft); box-shadow: inset 0 0 0 1px var(--ws-tv); }
                 #letterboxdSyncConfigPage .ws-chip.on[data-s="Success"] { border-color: var(--ws-ok); background: rgba(53,194,129,.14); box-shadow: inset 0 0 0 1px var(--ws-ok); }
                 #letterboxdSyncConfigPage .ws-chip.on[data-s="Rewatch"] { border-color: var(--ws-info); background: rgba(71,180,242,.14); box-shadow: inset 0 0 0 1px var(--ws-info); }
-                #letterboxdSyncConfigPage .ws-chip.on[data-s="Reviewed"] { border-color: var(--ws-warn); background: rgba(245,166,35,.14); box-shadow: inset 0 0 0 1px var(--ws-warn); }
+                #letterboxdSyncConfigPage .ws-chip.on[data-s="Reviewed"], #letterboxdSyncConfigPage .ws-chip.on[data-s="Rated"] { border-color: var(--ws-warn); background: rgba(245,166,35,.14); box-shadow: inset 0 0 0 1px var(--ws-warn); }
+                #letterboxdSyncConfigPage .ws-chip.on[data-s="Requested"] { border-color: #a78bfa; background: rgba(167,139,250,.14); box-shadow: inset 0 0 0 1px #a78bfa; }
                 #letterboxdSyncConfigPage .ws-chip.on[data-s="Skipped"] { border-color: var(--ws-faint); background: var(--ws-raise); box-shadow: inset 0 0 0 1px var(--ws-faint); }
                 #letterboxdSyncConfigPage .ws-chip.on[data-s="Failed"] { border-color: var(--ws-crit); background: rgba(242,88,94,.14); box-shadow: inset 0 0 0 1px var(--ws-crit); }
                 #letterboxdSyncConfigPage .ws-dot { width: 8px; height: 8px; border-radius: 50%; }
@@ -113,11 +114,12 @@
                 #letterboxdSyncConfigPage .ws-pill { font-family: var(--ws-mono); font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 20px; display: inline-flex; }
                 #letterboxdSyncConfigPage .ws-pill.Success, #letterboxdSyncConfigPage .ws-pill.synced { color: var(--ws-ok); background: rgba(53,194,129,.13); }
                 #letterboxdSyncConfigPage .ws-pill.Rewatch { color: var(--ws-info); background: rgba(71,180,242,.14); }
-                #letterboxdSyncConfigPage .ws-pill.Reviewed { color: var(--ws-warn); background: rgba(245,166,35,.14); }
+                #letterboxdSyncConfigPage .ws-pill.Reviewed, #letterboxdSyncConfigPage .ws-pill.Rated { color: var(--ws-warn); background: rgba(245,166,35,.14); }
                 #letterboxdSyncConfigPage .ws-pill.has-reason { cursor: help; gap: 5px; }
                 #letterboxdSyncConfigPage .ws-info-i { display: inline-grid; place-items: center; width: 13px; height: 13px; border-radius: 50%; border: 1px solid currentColor; font-size: 9px; font-style: italic; line-height: 1; opacity: .8; }
                 #letterboxdSyncConfigPage .ws-pill.Skipped { color: var(--ws-muted); background: var(--ws-surface-2); }
                 #letterboxdSyncConfigPage .ws-pill.Failed { color: var(--ws-crit); background: rgba(242,88,94,.14); }
+                #letterboxdSyncConfigPage .ws-pill.Requested { color: #a78bfa; background: rgba(167,139,250,.14); }
                 #letterboxdSyncConfigPage .ws-when { font-family: var(--ws-mono); font-size: 12px; color: var(--ws-muted); white-space: nowrap; }
                 #letterboxdSyncConfigPage .ws-src { color: var(--ws-faint); font-size: 12px; }
                 #letterboxdSyncConfigPage .ws-review-btn { border: 1px solid var(--ws-border); background: var(--ws-surface-2); color: var(--ws-muted); font-family: inherit; font-size: 11.5px; padding: 4px 10px; border-radius: 7px; cursor: pointer; }
@@ -279,6 +281,8 @@
                                 <button type="button" class="ws-chip" data-s="Reviewed">Reviewed</button>
                                 <button type="button" class="ws-chip" data-s="Skipped">Skipped</button>
                                 <button type="button" class="ws-chip" data-s="Failed">Failed</button>
+                                <button type="button" class="ws-chip" data-s="Requested">Requested</button>
+                                <button type="button" class="ws-chip" data-s="Rated">Rated</button>
                             </div>
                             <div class="ws-panel" style="overflow-x:auto;">
                                 <table class="ws-table"><thead><tr><th>Title</th><th>Status</th><th>Source</th><th>When</th><th></th></tr></thead><tbody id="historyBody"><tr><td colspan="5" style="padding:2em;text-align:center;" class="ws-muted">Loading…</td></tr></tbody></table>
@@ -317,6 +321,7 @@
                                 <p class="ws-muted" style="font-size:12.5px;margin-top:0;">Auto-request titles missing from the library (films and TV shows).</p>
                                 <div class="ws-row"><label class="ws-field">Seerr URL</label><input type="text" class="ws-input" id="jellyseerrUrl" placeholder="http://192.168.1.122:5055" /></div>
                                 <div class="ws-row"><label class="ws-field">Seerr API key</label><input type="password" class="ws-input" id="jellyseerrApiKey" placeholder="Settings → General → API Key" /></div>
+                                <label class="ws-checks" style="display:flex;gap:9px;align-items:flex-start;cursor:pointer;font-size:13px;margin:4px 0 12px;"><input type="checkbox" id="autoApproveJellyseerr" /><span>Auto-approve requests created by Jellyscribe<span class="desc" style="display:block;color:var(--ws-faint);font-size:11.5px;">Seerr only sends a request to Radarr/Sonarr once it's approved, and it decides that from the permissions of the user the request belongs to — not from this API key. Without this, requests from users who lack Auto-Approve sit in Seerr's pending queue and nothing downloads. Turn it off to review them yourself.</span></span></label>
                                 <div style="display:flex;gap:10px;align-items:center;"><button type="button" class="ws-btn" id="testJellyseerrBtn">Test connection</button><span id="jellyseerrTestStatus" class="ws-muted" style="font-size:12.5px;"></span></div>
                             </div>
                             <div class="ws-panel" style="padding:18px;margin-bottom:14px;">
@@ -356,11 +361,21 @@
                     <div class="ws-row"><label class="ws-field">Jellyfin user</label><select class="ws-input" id="mUser"></select></div>
                     <div class="ws-row"><label class="ws-field" id="mUserLabel">Email or username</label><input type="text" class="ws-input" id="mUsername" /></div>
                     <div class="ws-row"><label class="ws-field">Password</label><input type="password" class="ws-input" id="mPassword" /></div>
-                    <div class="ws-row" id="mCookieRow" style="display:none;"><label class="ws-field">Raw cookies <span class="ws-muted" style="text-transform:none;">(recommended for Letterboxd)</span></label><input type="text" class="ws-input" id="mCookies" placeholder="Paste from a signed-in browser (incl. cf_clearance)" /></div>
+                    <!-- NOTE: these ids deliberately avoid the word "cookie". Privacy and
+                         anti-annoyance filter lists (Ghostery, uBlock annoyance lists, AdGuard,
+                         Brave shields) carry generic cosmetic rules like [id*="cookie" i] to kill
+                         consent banners, and they matched this input. The label rendered and the
+                         box did not, so the field looked simply missing, with no console error.
+                         That silently blocks the raw-cookie login path we point Cloudflare- and
+                         2FA-blocked users at, and they have no way to tell it is their extension.
+                         Reported in issue #112. Keep the visible label as "Raw cookies"; only the
+                         attributes need to stay boring. -->
+                    <div class="ws-row" id="mAuthBlobRow" style="display:none;"><label class="ws-field">Raw cookies <span class="ws-muted" style="text-transform:none;">(recommended for Letterboxd)</span></label><input type="text" class="ws-input" id="mAuthBlob" placeholder="Paste from a signed-in browser (incl. cf_clearance)" /></div>
                     <div class="ws-row" id="mUserAgentRow" style="display:none;"><label class="ws-field">User-Agent <span class="ws-muted" style="text-transform:none;">(optional, match the browser you copied cookies from)</span></label><input type="text" class="ws-input" id="mUserAgent" placeholder="Mozilla/5.0 …" /></div>
                     <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;"><button type="button" class="ws-btn" id="mVerifyBtn">Verify login</button><span id="mVerifyStatus" class="ws-muted" style="font-size:12.5px;"></span></div>
                     <div class="ws-checks" id="mChecks"></div>
                     <div class="ws-row" id="mWatchNameRow" style="margin-top:12px;"><label class="ws-field">Watchlist name <span class="ws-muted" style="text-transform:none;">(optional)</span></label><input type="text" class="ws-input" id="mWatchName" placeholder="" /></div>
+                    <div class="ws-row" id="mLibRow" style="display:none;margin-top:12px;"><label class="ws-field">Excluded libraries <span class="ws-muted" style="text-transform:none;">(never synced to this account; applies to future syncs)</span></label><div class="ws-checks" id="mLibs"></div></div>
                     <div style="display:flex;gap:10px;margin-top:18px;align-items:center;">
                         <button type="button" class="ws-btn primary" id="mSaveBtn">Save</button>
                         <button type="button" class="ws-btn" id="mCancelBtn">Cancel</button>
@@ -405,6 +420,7 @@
                         pageSize: 25,
                         actOffset: 0, actTotal: 0,
                         editing: null,
+                        libraries: null,
 
                         ensureViewport: function () {
                             try {
@@ -433,8 +449,16 @@
                                         self.renderAccounts();
                                     }).catch(function () { });
                                     self.loadOverview();
+                                    // Libraries for the per-account exclusion list. Fail-soft: null means
+                                    // "unknown", and saving then keeps each account's stored list untouched.
+                                    ApiClient.getJSON(ApiClient.getUrl('Jellyfin.Plugin.LetterboxdSync/Libraries')).then(function (d) {
+                                        self.libraries = (d && d.libraries) || [];
+                                    }).catch(function () { });
                                     document.getElementById('jellyseerrUrl').value = c.JellyseerrUrl || '';
                                     document.getElementById('jellyseerrApiKey').value = c.JellyseerrApiKey || '';
+                                    // Default on: older configs predate the field, and the option exists
+                                    // because pending requests never reach Radarr/Sonarr.
+                                    document.getElementById('autoApproveJellyseerr').checked = c.AutoApproveJellyseerrRequests !== false;
                                     document.getElementById('telemetryEnabled').checked = !!(c.Telemetry && c.Telemetry.Enabled);
                                     document.getElementById('enhancedReviewSyncEnabled').checked = c.EnhancedReviewSyncEnabled === true;
                                     document.getElementById('enhancedReviewBackfill').checked = c.EnhancedReviewSyncBackfill !== false;
@@ -557,7 +581,8 @@
                                 var buckets = new Array(days).fill(0);
                                 self.merged.forEach(function (e) {
                                     var idx = days - 1 - Math.floor((now - new Date(e.Timestamp).getTime()) / dayMs);
-                                    if (e._svc === svc && idx >= 0 && idx < days) buckets[idx]++;
+                                    // Rating pushes (status 5) aren't logged watches; keep them off the trend line.
+                                    if (e._svc === svc && e.Status !== 5 && e.Status !== 'Rated' && idx >= 0 && idx < days) buckets[idx]++;
                                 });
                                 var max = Math.max.apply(null, buckets.concat([1])), w = 120, h = 26, step = w / (days - 1);
                                 var pts = buckets.map(function (v, i) { return [Math.round(i * step), Math.round(h - 2 - (v / max) * (h - 5))]; });
@@ -600,7 +625,7 @@
                         },
                         statusOf: function (e) {
                             if (e.Source === 'review') return 'Reviewed';
-                            return typeof e.Status === 'string' ? e.Status : (['Success', 'Skipped', 'Failed', 'Rewatch'][e.Status] || 'Success');
+                            return typeof e.Status === 'string' ? e.Status : (['Success', 'Skipped', 'Failed', 'Rewatch', 'Requested', 'Rated'][e.Status] || 'Success');
                         },
                         matchesStatus: function (e) {
                             var s = this.ovStatus || 'all';
@@ -620,7 +645,7 @@
                             return events.map(function (e) {
                                 var source = e._svc || src;
                                 var svc = source === 'serializd' ? 'tv' : 'film';
-                                var status = typeof e.Status === 'string' ? e.Status : ['Success', 'Skipped', 'Failed', 'Rewatch'][e.Status] || 'Success';
+                                var status = typeof e.Status === 'string' ? e.Status : ['Success', 'Skipped', 'Failed', 'Rewatch', 'Requested', 'Rated'][e.Status] || 'Success';
                                 var title = (e.FilmTitle || '').split(' · ');
                                 var t = title[0], m = title[1] || '';
                                 var ts = new Date(e.Timestamp);
@@ -759,7 +784,10 @@
                             a = a || {};
                             var rows = [
                                 ['Enabled', 'chkEnabled', a.Enabled !== false, 'Master switch. When off, nothing syncs for this account.'],
-                                ['Mark favourites as liked', 'chkFav', !!a.SyncFavorites, 'Favourite in Jellyfin → hearted on the diary.'],
+                                ['Mark favourites as liked', 'chkFav', !!a.SyncFavorites, 'Favourite in Jellyfin → hearted on the diary.']
+                            // Always rendered; onSvcChange shows it only for Letterboxd, so switching the
+                            // service on a new account reveals it without re-rendering the other boxes.
+                            ].concat([['Sync ratings to Letterboxd', 'chkRatings', a.SyncRatings !== false, 'Rate in Jellyfin after watching → the Letterboxd film rating.']]).concat([
                                 ['Only sync recently played', 'chkDate', !!a.EnableDateFilter, 'Limit the catch-up to the last N days.'],
                                 ['Primary account', 'chkPrimary', !!a.IsPrimary, 'Wins on tie-breaks when a user has several.'],
                                 ['Sync watchlist to library', 'chkWatch', svc === 'serializd' ? !!a.SyncWatchlist : !!a.EnableWatchlistSync, svc === 'serializd' ? 'Watchlist → Jellyfin collection + playlist.' : 'Watchlist → Jellyfin playlist.'],
@@ -769,17 +797,33 @@
                                 ['Skip already-synced', 'chkSkip', a.SkipPreviouslySynced !== false, 'Use local history to avoid re-logging.'],
                                 ['Stop on first failure', 'chkStop', !!a.StopOnFailure, 'Halt this account on the first error.'],
                                 ['Import diary as watched', 'chkImport', !!a.EnableDiaryImport, 'Reverse: mark Jellyfin played from the diary.']
-                            ];
+                            ]);
                             return rows.map(function (r) {
                                 return '<label><input type="checkbox" id="' + r[1] + '"' + (r[2] ? ' checked' : '') + ' /><span>' + r[0] + '<span class="desc">' + r[3] + '</span></span></label>';
                             }).join('') +
                             '<div class="ws-row" id="dateDaysRow" style="display:' + (a.EnableDateFilter ? 'block' : 'none') + ';margin-top:4px;"><label class="ws-field">Days to look back</label><input type="number" class="ws-input" id="chkDateDays" min="1" max="365" value="' + (a.DateFilterDays || 7) + '" /></div>';
                         },
+                        // Stored ids for libraries this page listed are replaced by what is ticked; ids for
+                        // libraries it did not list are kept, so a partial or failed library list can never
+                        // silently clear an exclusion. That also keeps ids of deleted libraries, which is
+                        // harmless: they match nothing.
+                        mergeExcluded: function (stored, ticked) {
+                            var shown = (this.libraries || []).map(function (l) { return l.id; });
+                            return stored.filter(function (id) { return shown.indexOf(id) < 0; }).concat(ticked);
+                        },
+                        libsFor: function (a) {
+                            var self = this, excluded = (a && a.ExcludedLibraryIds) || [];
+                            return (self.libraries || []).map(function (l) {
+                                return '<label><input type="checkbox" class="mLibChk" data-id="' + self.escAttr(l.id) + '"' + (excluded.indexOf(l.id) >= 0 ? ' checked' : '') + ' /><span>' + self.escAttr(l.name) + '<span class="desc">' + ({ movies: 'Films', tvshows: 'TV', mixed: 'Mixed' }[l.collectionType] || 'Mixed') + '</span></span></label>';
+                            }).join('');
+                        },
                         onSvcChange: function () {
                             var svc = document.getElementById('mSvc').value;
                             document.getElementById('mUserLabel').textContent = svc === 'serializd' ? 'Email or username' : 'Letterboxd username';
-                            document.getElementById('mCookieRow').style.display = svc === 'letterboxd' ? 'block' : 'none';
+                            document.getElementById('mAuthBlobRow').style.display = svc === 'letterboxd' ? 'block' : 'none';
                             document.getElementById('mUserAgentRow').style.display = svc === 'letterboxd' ? 'block' : 'none';
+                            var ratingsBox = document.getElementById('chkRatings');
+                            if (ratingsBox) ratingsBox.closest('label').style.display = svc === 'letterboxd' ? '' : 'none';
                             var uname = document.getElementById('mUsername').value.trim();
                             document.getElementById('mWatchName').placeholder = svc === 'serializd' ? 'Serializd Watchlist' : ('Letterboxd Watchlist' + (uname ? ' (' + uname + ')' : ''));
                         },
@@ -799,12 +843,14 @@
                             usel.innerHTML = self.users.map(function (u) { var h = (u.Id || '').replace(/-/g, ''); return '<option value="' + h + '"' + (h === userId ? ' selected' : '') + '>' + u.Name + '</option>'; }).join('');
                             document.getElementById('mUsername').value = a ? (svc === 'serializd' ? a.Email : a.LetterboxdUsername) : '';
                             document.getElementById('mPassword').value = a ? (svc === 'serializd' ? (a.Password || '') : (a.LetterboxdPassword || '')) : '';
-                            document.getElementById('mCookies').value = (a && a.RawCookies) || '';
+                            document.getElementById('mAuthBlob').value = (a && a.RawCookies) || '';
                             document.getElementById('mUserAgent').value = (a && a.UserAgent) || '';
                             document.getElementById('mWatchName').value = (a && (svc === 'serializd' ? a.WatchlistName : a.PlaylistName)) || '';
                             document.getElementById('mVerifyStatus').textContent = ''; document.getElementById('mStatus').textContent = '';
                             document.getElementById('mDeleteBtn').style.display = a ? '' : 'none';
                             document.getElementById('mChecks').innerHTML = self.checksFor(svc || 'serializd', a);
+                            document.getElementById('mLibs').innerHTML = self.libsFor(a);
+                            document.getElementById('mLibRow').style.display = (self.libraries || []).length ? 'block' : 'none';
                             document.getElementById('chkDate').addEventListener('change', function () { document.getElementById('dateDaysRow').style.display = this.checked ? 'block' : 'none'; });
                             self.onSvcChange();
                             document.getElementById('acctModal').classList.add('show');
@@ -813,24 +859,27 @@
                             var g = function (id) { return document.getElementById(id); };
                             return {
                                 svc: g('mSvc').value, userId: g('mUser').value,
-                                username: g('mUsername').value.trim(), password: g('mPassword').value, cookies: g('mCookies').value,
+                                username: g('mUsername').value.trim(), password: g('mPassword').value, cookies: g('mAuthBlob').value,
                                 userAgent: g('mUserAgent').value.trim(), watchName: g('mWatchName').value.trim(),
-                                enabled: g('chkEnabled').checked, fav: g('chkFav').checked, date: g('chkDate').checked, days: parseInt(g('chkDateDays').value, 10) || 7,
+                                enabled: g('chkEnabled').checked, fav: g('chkFav').checked, ratings: g('chkRatings') ? g('chkRatings').checked : true, date: g('chkDate').checked, days: parseInt(g('chkDateDays').value, 10) || 7,
                                 primary: g('chkPrimary').checked, watch: g('chkWatch').checked, seerr: g('chkSeerr').checked,
                                 backfill: g('chkBackfill').checked, mirror: g('chkMirror').checked,
-                                skip: g('chkSkip').checked, stop: g('chkStop').checked, imp: g('chkImport').checked
+                                skip: g('chkSkip').checked, stop: g('chkStop').checked, imp: g('chkImport').checked,
+                                libs: Array.prototype.map.call(document.querySelectorAll('#mLibs .mLibChk:checked'), function (x) { return x.getAttribute('data-id'); })
                             };
                         },
                         saveAccount: function () {
                             var self = this, m = self.collectModal();
                             if (!m.username) { document.getElementById('mStatus').innerHTML = '<span class="ws-red">Username/email is required.</span>'; return; }
+                            if (m.svc === 'letterboxd' && m.username.indexOf('@') >= 0) { document.getElementById('mStatus').innerHTML = '<span class="ws-red">Letterboxd no longer accepts an email address to sign in. Use your Letterboxd username, the name in letterboxd.com/&lt;username&gt;/.</span>'; return; }
                             var orig = self.editing.original;
+                            var excludedLibs = self.mergeExcluded((orig && orig.ExcludedLibraryIds) || [], m.libs);
                             if (m.svc === 'serializd') {
                                 self.config.SerializdAccounts = (self.config.SerializdAccounts || []).filter(function (x) { return x !== orig; });
-                                self.config.SerializdAccounts.push({ UserJellyfinId: m.userId, Email: m.username, Password: m.password, Enabled: m.enabled, SyncFavorites: m.fav, EnableDateFilter: m.date, DateFilterDays: m.days, IsPrimary: m.primary, SyncWatchlist: m.watch, AutoRequestWatchlist: m.seerr, BackfillAvailableRequests: m.backfill, MirrorJellyseerrWatchlist: m.mirror, WatchlistName: m.watchName || null, SkipPreviouslySynced: m.skip, StopOnFailure: m.stop, EnableDiaryImport: m.imp });
+                                self.config.SerializdAccounts.push({ UserJellyfinId: m.userId, Email: m.username, Password: m.password, Enabled: m.enabled, SyncFavorites: m.fav, EnableDateFilter: m.date, DateFilterDays: m.days, IsPrimary: m.primary, SyncWatchlist: m.watch, AutoRequestWatchlist: m.seerr, BackfillAvailableRequests: m.backfill, MirrorJellyseerrWatchlist: m.mirror, WatchlistName: m.watchName || null, SkipPreviouslySynced: m.skip, StopOnFailure: m.stop, EnableDiaryImport: m.imp, ExcludedLibraryIds: excludedLibs });
                             } else {
                                 self.config.Accounts = (self.config.Accounts || []).filter(function (x) { return x !== orig; });
-                                self.config.Accounts.push({ UserJellyfinId: m.userId, LetterboxdUsername: m.username, LetterboxdPassword: m.password, RawCookies: m.cookies || null, UserAgent: m.userAgent || null, Enabled: m.enabled, SyncFavorites: m.fav, EnableDateFilter: m.date, DateFilterDays: m.days, IsPrimary: m.primary, EnableWatchlistSync: m.watch, AutoRequestWatchlist: m.seerr, BackfillAvailableRequests: m.backfill, MirrorJellyseerrWatchlist: m.mirror, PlaylistName: m.watchName || null, SkipPreviouslySynced: m.skip, StopOnFailure: m.stop, EnableDiaryImport: m.imp });
+                                self.config.Accounts.push({ UserJellyfinId: m.userId, LetterboxdUsername: m.username, LetterboxdPassword: m.password, RawCookies: m.cookies || null, UserAgent: m.userAgent || null, Enabled: m.enabled, SyncFavorites: m.fav, SyncRatings: m.ratings, EnableDateFilter: m.date, DateFilterDays: m.days, IsPrimary: m.primary, EnableWatchlistSync: m.watch, AutoRequestWatchlist: m.seerr, BackfillAvailableRequests: m.backfill, MirrorJellyseerrWatchlist: m.mirror, PlaylistName: m.watchName || null, SkipPreviouslySynced: m.skip, StopOnFailure: m.stop, EnableDiaryImport: m.imp, ExcludedLibraryIds: excludedLibs });
                             }
                             document.getElementById('mStatus').textContent = 'Saving…';
                             ApiClient.updatePluginConfiguration(self.PluginId, self.config).then(function () {
@@ -847,9 +896,28 @@
                                 document.getElementById('acctModal').classList.remove('show'); self.renderAccounts();
                             });
                         },
+                        verifyMessage: function (ok, d) {
+                            var esc = function (s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+                            d = d || {};
+                            if (ok && d.via === 'api') return '<span class="ws-green">Login OK (official API).</span>';
+                            if (ok) return '<span class="ws-green">Login OK via the website login.</span> <span class="ws-muted">The official API refused it: ' + esc(d.apiError) + '</span>';
+                            var parts = [];
+                            if (d.error && d.error !== 'Login failed.') parts.push(esc(d.error));
+                            if (d.apiError) parts.push('Official API: ' + esc(d.apiError));
+                            if (d.websiteError) parts.push('Website: ' + esc(d.websiteError));
+                            return '<span class="ws-red">Login failed.' + (parts.length ? ' ' + parts.join(' · ') : '') + '</span>';
+                        },
                         verifyAccount: function () {
-                            var svc = document.getElementById('mSvc').value, st = document.getElementById('mVerifyStatus');
-                            if (svc !== 'serializd') { st.innerHTML = '<span class="ws-muted">Verify is available for Serializd; Letterboxd is checked on first sync.</span>'; return; }
+                            var self = this, svc = document.getElementById('mSvc').value, st = document.getElementById('mVerifyStatus');
+                            if (svc === 'letterboxd') {
+                                var lbUser = document.getElementById('mUsername').value.trim(), lbPw = document.getElementById('mPassword').value;
+                                if (!lbUser || !lbPw) { st.innerHTML = '<span class="ws-red">Username and password required.</span>'; return; }
+                                st.innerHTML = '<span class="ws-muted">Verifying… (can take a few seconds)</span>';
+                                ApiClient.ajax({ url: ApiClient.getUrl('Jellyfin.Plugin.LetterboxdSync/Verify'), type: 'POST', contentType: 'application/json', data: JSON.stringify({ letterboxdUsername: lbUser, letterboxdPassword: lbPw, rawCookies: document.getElementById('mAuthBlob').value || null, userAgent: document.getElementById('mUserAgent').value.trim() || null }) })
+                                    .then(function (r) { r.json().then(function (d) { st.innerHTML = self.verifyMessage(true, d); }); },
+                                        function (r) { if (r && r.json) r.json().then(function (d) { st.innerHTML = self.verifyMessage(false, d); }, function () { st.innerHTML = self.verifyMessage(false, null); }); else st.innerHTML = self.verifyMessage(false, null); });
+                                return;
+                            }
                             var email = document.getElementById('mUsername').value.trim(), pw = document.getElementById('mPassword').value;
                             if (!email || !pw) { st.innerHTML = '<span class="ws-red">Email and password required.</span>'; return; }
                             st.innerHTML = '<span class="ws-muted">Verifying…</span>';
@@ -983,6 +1051,7 @@
                             var self = this;
                             self.config.JellyseerrUrl = document.getElementById('jellyseerrUrl').value.trim() || null;
                             self.config.JellyseerrApiKey = document.getElementById('jellyseerrApiKey').value.trim() || null;
+                            self.config.AutoApproveJellyseerrRequests = document.getElementById('autoApproveJellyseerr').checked;
                             self.config.Telemetry = self.config.Telemetry || {};
                             self.config.Telemetry.Enabled = document.getElementById('telemetryEnabled').checked;
                             self.config.EnhancedReviewSyncEnabled = document.getElementById('enhancedReviewSyncEnabled').checked;

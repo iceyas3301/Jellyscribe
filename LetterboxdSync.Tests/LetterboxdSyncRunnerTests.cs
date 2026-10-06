@@ -94,6 +94,134 @@ public class LetterboxdSyncRunnerTests : IDisposable
         });
     }
 
+    // ----- Library exclusion (issue #124) -----
+
+    private static readonly Guid AnimeLibraryId = Guid.Parse("0c5b2a1e9f3d4c7a8b6e5d4c3b2a1f0e");
+
+    [Fact]
+    public async Task TryRunForUserAsync_FilmInExcludedLibrary_SkipsOnlyTheExcludingAccount()
+    {
+        var (user, userId) = MakeUser("lachlan");
+        _userManager.GetUsers().Returns(new[] { user });
+        Plugin.Instance!.Configuration.Accounts.Add(new Account
+        {
+            UserJellyfinId = userId,
+            LetterboxdUsername = "lb-excludes",
+            LetterboxdPassword = "secret",
+            Enabled = true,
+            SkipPreviouslySynced = false,
+            ExcludedLibraryIds = { AnimeLibraryId.ToString("N") }
+        });
+        Plugin.Instance!.Configuration.Accounts.Add(new Account
+        {
+            UserJellyfinId = userId,
+            LetterboxdUsername = "lb-keeps",
+            LetterboxdPassword = "secret",
+            Enabled = true,
+            SkipPreviouslySynced = false
+        });
+
+        var movie = MakeMovie(1233413, "Perfect Blue");
+        _libraryManager.GetItemList(Arg.Any<InternalItemsQuery>()).Returns(new List<BaseItem> { movie });
+        _libraryManager.GetCollectionFolders(movie)
+            .Returns(new List<Folder> { new CollectionFolder { Id = AnimeLibraryId } });
+        _userDataManager.GetUserData(user, movie).Returns(
+            new UserItemData { Key = "k", Played = true, LastPlayedDate = DateTime.UtcNow });
+
+        var authedAs = new List<string>();
+        var service = Substitute.For<ILetterboxdService>();
+        service.LookupFilmByTmdbIdAsync(Arg.Any<int>())
+            .Returns(new FilmResult("perfect-blue", "KQMM", "PROD-1"));
+        service.GetDiaryInfoAsync(Arg.Any<string>(), Arg.Any<string>())
+            .Returns(new DiaryInfo(null, false));
+        LetterboxdServiceFactory.OverrideForTesting = (username, _, _, _, _) =>
+        {
+            authedAs.Add(username);
+            return Task.FromResult(service);
+        };
+
+        var ok = await _runner.TryRunForUserAsync(userId, "test",
+            new Progress<double>(), CancellationToken.None);
+
+        Assert.True(ok);
+        // The excluding account exits before auth; the other account syncs the film.
+        Assert.Equal(new[] { "lb-keeps" }, authedAs);
+        await service.Received(1).LookupFilmByTmdbIdAsync(1233413);
+        // An exclusion is a choice, not a failure or skip worth a history row.
+        Assert.DoesNotContain(SyncHistory.GetRecent(100, "lachlan"), e => e.Status != SyncStatus.Success);
+    }
+
+    [Fact]
+    public async Task TryRunForUserAsync_EveryFilmExcluded_CompletesWithoutAuthOrHistory()
+    {
+        var (user, userId) = MakeUser("lachlan");
+        _userManager.GetUsers().Returns(new[] { user });
+        Plugin.Instance!.Configuration.Accounts.Add(new Account
+        {
+            UserJellyfinId = userId,
+            LetterboxdUsername = "lb-excludes",
+            LetterboxdPassword = "secret",
+            Enabled = true,
+            SkipPreviouslySynced = false,
+            ExcludedLibraryIds = { AnimeLibraryId.ToString("N") }
+        });
+        var movie = MakeMovie(1233413, "Perfect Blue");
+        _libraryManager.GetItemList(Arg.Any<InternalItemsQuery>()).Returns(new List<BaseItem> { movie });
+        _libraryManager.GetCollectionFolders(movie)
+            .Returns(new List<Folder> { new CollectionFolder { Id = AnimeLibraryId } });
+        _userDataManager.GetUserData(user, movie).Returns(
+            new UserItemData { Key = "k", Played = true, LastPlayedDate = DateTime.UtcNow });
+        var factoryHit = false;
+        LetterboxdServiceFactory.OverrideForTesting = (_, _, _, _, _) =>
+        {
+            factoryHit = true;
+            return Task.FromResult(Substitute.For<ILetterboxdService>());
+        };
+
+        var ok = await _runner.TryRunForUserAsync(userId, "test", new Progress<double>(), CancellationToken.None);
+
+        Assert.True(ok);
+        Assert.False(factoryHit);
+        Assert.Empty(SyncHistory.GetRecent(100, "lachlan"));
+        // The progress track is closed, so the dashboard does not spin forever.
+        var snapshot = SyncProgress.GetSnapshot();
+        Assert.False((bool)snapshot.GetType().GetProperty("isRunning")!.GetValue(snapshot)!);
+    }
+
+    [Fact]
+    public async Task TryRunForUserAsync_FilmInOtherLibrary_StillSyncsForExcludingAccount()
+    {
+        var (user, userId) = MakeUser("lachlan");
+        _userManager.GetUsers().Returns(new[] { user });
+        Plugin.Instance!.Configuration.Accounts.Add(new Account
+        {
+            UserJellyfinId = userId,
+            LetterboxdUsername = "lb-excludes",
+            LetterboxdPassword = "secret",
+            Enabled = true,
+            SkipPreviouslySynced = false,
+            ExcludedLibraryIds = { AnimeLibraryId.ToString("N") }
+        });
+
+        var movie = MakeMovie(1233413);
+        _libraryManager.GetItemList(Arg.Any<InternalItemsQuery>()).Returns(new List<BaseItem> { movie });
+        _libraryManager.GetCollectionFolders(movie)
+            .Returns(new List<Folder> { new CollectionFolder { Id = Guid.NewGuid() } });
+        _userDataManager.GetUserData(user, movie).Returns(
+            new UserItemData { Key = "k", Played = true, LastPlayedDate = DateTime.UtcNow });
+
+        var service = Substitute.For<ILetterboxdService>();
+        service.LookupFilmByTmdbIdAsync(Arg.Any<int>())
+            .Returns(new FilmResult("sinners-2025", "KQMM", "PROD-1"));
+        service.GetDiaryInfoAsync(Arg.Any<string>(), Arg.Any<string>())
+            .Returns(new DiaryInfo(null, false));
+        LetterboxdServiceFactory.OverrideForTesting = (_, _, _, _, _) => Task.FromResult(service);
+
+        await _runner.TryRunForUserAsync(userId, "test", new Progress<double>(), CancellationToken.None);
+
+        await service.Received(1).LookupFilmByTmdbIdAsync(1233413);
+    }
+
     // ----- TryRunForUserAsync: pre-flight gates -----
 
     [Fact]

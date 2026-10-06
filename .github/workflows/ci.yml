@@ -14,23 +14,54 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Validate manifest.json
-        # manifest.json is CI-managed (see release.yml). This guards the two
-        # ways it can be poisoned by hand: a PLACEHOLDER checksum left in,
-        # or a sourceUrl that no longer resolves (release deleted/renamed).
+        # manifest.json is CI-managed (see release.yml). This guards the two ways it can be
+        # poisoned by hand: a PLACEHOLDER checksum left in, or a sourceUrl that no longer
+        # resolves (release deleted/renamed). That is the v1.12.0.0 incident, where the manifest
+        # advertised a 404 to every user.
+        #
+        # Two failure modes are deliberately treated differently:
+        #   - A definitive HTTP answer we don't like (404, 410, 403...) means the manifest is
+        #     actually wrong. Fail the build.
+        #   - A transport error (DNS, TLS, timeout) after retries means we could not reach the
+        #     host. That is evidence about the network, not about the manifest, so warn loudly
+        #     and carry on rather than reporting a manifest problem that may not exist.
+        #
+        # The previous version did neither: it ran under `set -e` with `code=$(curl ...)`, so a
+        # single transient curl failure aborted the step at that line with no message at all. One
+        # TLS blip red-flagged a PR whose diff did not touch manifest.json. With 59 historical
+        # URLs checked on every run, the odds of hitting one grow with each release.
         run: |
-          set -e
           if grep -q PLACEHOLDER manifest.json; then
             echo "::error::manifest.json contains PLACEHOLDER. Manifest entries are inserted by release.yml after a successful build, do not pre-commit them. See CLAUDE.md > Releasing."
             exit 1
           fi
+
           fail=0
+          unreachable=0
+          checked=0
           while IFS= read -r url; do
-            code=$(curl -sIL -o /dev/null -w '%{http_code}' "$url")
-            if [ "$code" != "200" ]; then
+            checked=$((checked + 1))
+            # --retry-all-errors covers connection/TLS resets, which plain --retry ignores.
+            code=$(curl -sIL -o /dev/null -w '%{http_code}' \
+                     --retry 3 --retry-delay 2 --retry-all-errors \
+                     --connect-timeout 10 --max-time 30 \
+                     "$url") || curl_rc=$?
+            curl_rc=${curl_rc:-0}
+
+            if [ "$curl_rc" -ne 0 ]; then
+              echo "::warning::could not reach manifest sourceUrl after retries (curl exit $curl_rc), not treating as a manifest error: $url"
+              unreachable=$((unreachable + 1))
+            elif [ "$code" != "200" ]; then
               echo "::error::manifest sourceUrl returned HTTP $code: $url"
               fail=1
             fi
+            unset curl_rc
           done < <(jq -r '.[0].versions[].sourceUrl' manifest.json)
+
+          echo "checked $checked sourceUrl(s); $unreachable unreachable, $fail hard failure(s)"
+          if [ "$unreachable" -gt 0 ] && [ "$unreachable" -eq "$checked" ]; then
+            echo "::warning::every sourceUrl was unreachable, which points at the runner's network or the download host being down rather than at manifest.json."
+          fi
           exit $fail
 
       - name: Setup .NET
@@ -67,8 +98,83 @@ jobs:
       - name: Upload test results to Codecov
         # Codecov Test Analytics: flaky-test detection + failure reporting from the
         # JUnit XML. Runs even on test failure so failing/flaky runs are reported.
+        # Analytics only, like the coverage upload above: an outage on Codecov's side (TLS
+        # handshake failures from 2026-10-05) must not turn a passing build red.
         if: ${{ !cancelled() }}
+        continue-on-error: true
         uses: codecov/test-results-action@v1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./TestResults/junit.xml
+
+  jellyfin-12-prerelease:
+    # Non-blocking early-warning probe for the Jellyfin 12 line. Jellyfin 12's SDK packages
+    # ship lib/net10.0 only, so building against them forces net10.0, and a net10.0 assembly
+    # cannot load on Jellyfin 10.11's .NET 9 host. Adopting the 12 SDK is therefore a one-way
+    # split of the release stream, not a routine bump, and is deliberately NOT what this job
+    # does: it only tells us whether our code still compiles and passes tests against 12, weeks
+    # before we would have to care. Shipping defaults (net9.0 / SDK 10.11.9) are untouched.
+    #
+    # A red run here is information, never a gate: continue-on-error keeps it out of required
+    # checks. If it goes red, read it as "12 has drifted", open an issue, and decide
+    # deliberately. See openspec/changes/add-jellyfin-12-support/.
+    name: Jellyfin 12 probe (non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup .NET 9 + 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
+
+      - name: Build and test against Jellyfin 12
+        id: probe
+        continue-on-error: true
+        # The csproj is patched HERE, on the runner, rather than being parameterised with
+        # MSBuild properties. That is deliberate: version-gate.yml greps the literal
+        # Version="..." off Jellyfin.Controller/Jellyfin.Model to enforce SDK == targetAbi.txt
+        # (issue #63, the floor policy). Replacing those literals with $(Property) made them
+        # unreadable and silently broke that guard. The shipped csproj therefore stays literal
+        # and greppable, and the probe edits a throwaway copy of it.
+        #
+        # Pinned rather than floating: a probe that silently changes what it tests is not a
+        # probe. Bump these pins deliberately as new 12.x releases ship.
+        # DataProtection is pinned >= 10.0.7: 10.0.0-10.0.6 are CVE-2026-40372.
+        run: |
+          set -euo pipefail
+          PLUGIN=LetterboxdSync/LetterboxdSync.csproj
+          TESTS=LetterboxdSync.Tests/LetterboxdSync.Tests.csproj
+
+          sed -i 's|<TargetFramework>net9.0</TargetFramework>|<TargetFramework>net10.0</TargetFramework>|' "$PLUGIN" "$TESTS"
+          sed -i 's|Include="Jellyfin.Controller" Version="[^"]*"|Include="Jellyfin.Controller" Version="12.1.0"|' "$PLUGIN"
+          sed -i 's|Include="Jellyfin.Model" Version="[^"]*"|Include="Jellyfin.Model" Version="12.1.0"|' "$PLUGIN"
+          sed -i 's|Include="Microsoft.AspNetCore.DataProtection" Version="[^"]*"|Include="Microsoft.AspNetCore.DataProtection" Version="10.0.12"|' "$PLUGIN"
+          sed -i 's|Include="Microsoft.Extensions.DependencyInjection" Version="[^"]*"|Include="Microsoft.Extensions.DependencyInjection" Version="10.0.12"|' "$TESTS"
+          sed -i 's|Include="Microsoft.Extensions.Hosting.Abstractions" Version="[^"]*"|Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.12"|' "$TESTS"
+
+          # Assert the rewrite actually landed. A sed that silently fails to match would leave the
+          # probe building 10.11.9 on net10.0 and reporting a meaningless pass, which is worse than
+          # no probe at all. Fail loudly instead.
+          for want in '<TargetFramework>net10.0</TargetFramework>' 'Jellyfin.Controller" Version="12.1.0"' 'Jellyfin.Model" Version="12.1.0"'; do
+            grep -qF "$want" "$PLUGIN" || { echo "::error::probe self-check failed, csproj rewrite did not apply: $want"; exit 1; }
+          done
+          grep -qF '<TargetFramework>net10.0</TargetFramework>' "$TESTS" || { echo "::error::probe self-check failed on test project"; exit 1; }
+          echo "--- patched references ---"
+          grep -nE 'TargetFramework>|Include="Jellyfin|DataProtection' "$PLUGIN"
+
+          dotnet test -c Release --verbosity normal --filter "Category!=Integration" 2>&1 | tee probe.log
+
+      - name: Report probe outcome
+        if: always()
+        run: |
+          if [ "${{ steps.probe.outcome }}" = "success" ]; then
+            echo "::notice::Jellyscribe still builds and tests clean against Jellyfin 12.1.0 (net10.0)."
+          else
+            echo "::warning::Jellyfin 12 probe FAILED against 12.1.0 (net10.0). This does not block the build. It means the 12 line has drifted from what we compile against today; investigate before 12 adoption is forced. First errors:"
+            grep -oE "(error|warning) [A-Z]+[0-9]+.*" probe.log 2>/dev/null | sort -u | head -20 || true
+          fi

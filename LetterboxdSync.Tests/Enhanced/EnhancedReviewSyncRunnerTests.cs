@@ -677,6 +677,9 @@ public class EnhancedReviewSyncRunnerTests : IDisposable
         public Task<string?> FindLogEntryIdAsync(string filmIdOrSlug, DateTime date)
             => Task.FromResult(ExistingEntries.TryGetValue(date.Date, out var id) ? id : null);
 
+        public Task SetFilmRatingAsync(string filmSlug, string filmId, double rating)
+            => Task.CompletedTask;
+
         public Task UpdateLogEntryAsync(string logEntryId, string? reviewText, bool containsSpoilers, double? rating)
         {
             Updates.Add(new UpdatedLogEntry(logEntryId, reviewText, rating, containsSpoilers));

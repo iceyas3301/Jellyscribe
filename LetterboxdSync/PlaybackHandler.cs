@@ -18,6 +18,7 @@ public class PlaybackHandler : IHostedService, IDisposable
 {
     private readonly ISessionManager _sessionManager;
     private readonly IUserDataManager _userDataManager;
+    private readonly ILibraryManager _libraryManager;
     private readonly ILogger<PlaybackHandler> _logger;
     private readonly MediaBrowser.Model.Activity.IActivityManager? _activityManager;
 
@@ -26,11 +27,13 @@ public class PlaybackHandler : IHostedService, IDisposable
     public PlaybackHandler(
         ISessionManager sessionManager,
         IUserDataManager userDataManager,
+        ILibraryManager libraryManager,
         ILogger<PlaybackHandler> logger,
         MediaBrowser.Model.Activity.IActivityManager? activityManager = null)
     {
         _sessionManager = sessionManager;
         _userDataManager = userDataManager;
+        _libraryManager = libraryManager;
         _logger = logger;
         _activityManager = activityManager;
     }
@@ -105,6 +108,14 @@ public class PlaybackHandler : IHostedService, IDisposable
 
             foreach (var account in accounts)
             {
+                if (LibraryExclusion.IsExcluded(_libraryManager, e.Item, account.ExcludedLibraryIds, _logger))
+                {
+                    _logger.LogInformation(
+                        "Skipping real-time sync of {Title} for {LbUser}: in a library this account excludes",
+                        e.Item.Name, account.LetterboxdUsername);
+                    continue;
+                }
+
                 var breakerUserId = user.Id.ToString("N");
                 if (AuthBreaker.IsOpen(breakerUserId, account.LetterboxdUsername))
                 {
@@ -254,6 +265,14 @@ public class PlaybackHandler : IHostedService, IDisposable
 
             foreach (var account in accounts)
             {
+                if (LibraryExclusion.IsExcluded(_libraryManager, episode, account.ExcludedLibraryIds, _logger))
+                {
+                    _logger.LogInformation(
+                        "Skipping real-time Serializd sync of {Series} S{Season}E{Episode} for {Email}: in a library this account excludes",
+                        episode.SeriesName ?? episode.Name, epRef.SeasonNumber, episode.IndexNumber, account.Email);
+                    continue;
+                }
+
                 try
                 {
                     using var service = await SerializdServiceFactory

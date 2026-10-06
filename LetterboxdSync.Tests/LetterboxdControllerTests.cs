@@ -1136,15 +1136,86 @@ public class LetterboxdControllerTests
 
             Assert.IsType<OkObjectResult>(result);
             // 4.5 Letterboxd stars → 9.0 Jellyfin rating, written back and persisted.
+            // Pinned to Import: RatingSyncHandler ignores Import saves, so this mirror can never
+            // echo back out as a second Letterboxd push. Any other reason reopens that loop.
             Assert.Equal(9.0, userData.Rating);
             h.UserDataManager.Received(1).SaveUserData(
                 user, movie, userData,
-                MediaBrowser.Model.Entities.UserDataSaveReason.UpdateUserRating,
+                MediaBrowser.Model.Entities.UserDataSaveReason.Import,
                 Arg.Any<System.Threading.CancellationToken>());
         }
         finally
         {
             LetterboxdServiceFactory.OverrideForTesting = null;
         }
+    }
+
+    // ----- Excluded libraries (issue #124) -----
+
+    [Fact]
+    public void PutAccounts_StoresNormalisedExcludedLibraryIds_AndGetAccountsEchoesThem()
+    {
+        using var h = new ControllerTestHarness(currentUserId: UserId);
+        const string anime = "0c5b2a1e9f3d4c7a8b6e5d4c3b2a1f0e";
+
+        var result = h.Controller.PutAccounts(new AccountsUpdateRequest
+        {
+            Accounts = new()
+            {
+                new AccountUpdateRequest
+                {
+                    LetterboxdUsername = "mine",
+                    // Dashed and upper-case duplicates collapse to one N-format id; junk is dropped.
+                    ExcludedLibraryIds = new() { "0C5B2A1E-9F3D-4C7A-8B6E-5D4C3B2A1F0E", anime, "not-a-guid" }
+                },
+                new AccountUpdateRequest { LetterboxdUsername = "other", ExcludedLibraryIds = null }
+            }
+        });
+
+        Assert.IsType<OkObjectResult>(result);
+        var mine = h.Config.Accounts.Where(a => a.UserJellyfinId == UserId).ToList();
+        Assert.Equal(new[] { anime }, mine.Single(a => a.LetterboxdUsername == "mine").ExcludedLibraryIds);
+        Assert.Empty(mine.Single(a => a.LetterboxdUsername == "other").ExcludedLibraryIds);
+
+        var get = Assert.IsType<OkObjectResult>(h.Controller.GetAccounts());
+        var echoed = Prop<System.Collections.IEnumerable>(get, "accounts")!.Cast<object>()
+            .Single(a => (string?)a.GetType().GetProperty("letterboxdUsername")!.GetValue(a) == "mine");
+        Assert.Equal(new[] { anime },
+            (IEnumerable<string>)echoed.GetType().GetProperty("excludedLibraryIds")!.GetValue(echoed)!);
+    }
+
+    [Fact]
+    public void PutAccount_OmittedExcludedLibraryIds_KeepsStoredList()
+    {
+        using var h = new ControllerTestHarness(currentUserId: UserId);
+        var account = h.AddAccount(UserId, "mine");
+        account.ExcludedLibraryIds.Add("0c5b2a1e9f3d4c7a8b6e5d4c3b2a1f0e");
+
+        h.Controller.PutAccount(new AccountUpdateRequest { LetterboxdUsername = "mine", ExcludedLibraryIds = null });
+
+        Assert.Equal(new[] { "0c5b2a1e9f3d4c7a8b6e5d4c3b2a1f0e" },
+            h.Config.Accounts.Single(a => a.UserJellyfinId == UserId).ExcludedLibraryIds);
+    }
+
+    [Fact]
+    public void PutAccounts_OmittedExcludedLibraryIds_KeepsStoredListPerAccount()
+    {
+        // A client that predates the field must not clear what an account keeps off Letterboxd.
+        using var h = new ControllerTestHarness(currentUserId: UserId);
+        const string anime = "0c5b2a1e9f3d4c7a8b6e5d4c3b2a1f0e";
+        h.AddAccount(UserId, "Mine").ExcludedLibraryIds.Add(anime);
+
+        h.Controller.PutAccounts(new AccountsUpdateRequest
+        {
+            Accounts = new()
+            {
+                new AccountUpdateRequest { LetterboxdUsername = "mine", ExcludedLibraryIds = null },
+                new AccountUpdateRequest { LetterboxdUsername = "brand-new", ExcludedLibraryIds = null }
+            }
+        });
+
+        var mine = h.Config.Accounts.Where(a => a.UserJellyfinId == UserId).ToList();
+        Assert.Equal(new[] { anime }, mine.Single(a => a.LetterboxdUsername == "mine").ExcludedLibraryIds);
+        Assert.Empty(mine.Single(a => a.LetterboxdUsername == "brand-new").ExcludedLibraryIds);
     }
 }

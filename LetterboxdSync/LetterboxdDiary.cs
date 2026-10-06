@@ -226,6 +226,107 @@ public class LetterboxdDiary
         throw new Exception($"Failed to post review for {filmSlug} after {LetterboxdHttpClient.MaxRetries} attempts");
     }
 
+    /// <summary>
+    /// Sets the member's film rating through the site's rate action. Unlike the official API,
+    /// this endpoint takes a 0-10 integer (half-stars x 2) and the numeric film id.
+    /// </summary>
+    public async Task SetFilmRatingAsync(string filmSlug, string filmId, double rating)
+    {
+        var wireRating = ToRateEndpointScale(rating).ToString(CultureInfo.InvariantCulture);
+
+        for (int attempt = 0; attempt < LetterboxdHttpClient.MaxRetries; attempt++)
+        {
+            await _http.RefreshCsrfAsync().ConfigureAwait(false);
+
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"/s/film:{Uri.EscapeDataString(filmId)}/rate/");
+            _http.SetApiHeaders(req, filmSlug);
+            req.Content = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["rating"] = wireRating,
+                ["__csrf"] = _http.Csrf
+            });
+
+            using var res = await _http.Http.SendAsync(req).ConfigureAwait(false);
+            var body = await res.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+            _logger.LogInformation("SetFilmRating attempt {Attempt} for {Slug}: status={Status}, bodyLen={Len}",
+                attempt + 1, filmSlug, (int)res.StatusCode, body.Length);
+
+            if (res.StatusCode == HttpStatusCode.Unauthorized)
+            {
+                if (_auth.ShouldReauthenticate())
+                {
+                    _logger.LogWarning("Got 401 rating {Slug}, session expired. Re-authenticating and retrying", filmSlug);
+                    await _auth.ForceReauthenticateAsync().ConfigureAwait(false);
+                    continue;
+                }
+                throw new Exception($"Letterboxd returned 401 rating {filmSlug} after re-authentication. Session may be permanently invalid.");
+            }
+
+            if (res.StatusCode == HttpStatusCode.Forbidden && attempt < LetterboxdHttpClient.MaxRetries - 1)
+            {
+                var backoff = (attempt + 1) * 15000 + Random.Shared.Next(10000);
+                _logger.LogWarning("Rating {Slug} got 403. Backing off {Delay}ms (attempt {Attempt}/3)",
+                    filmSlug, backoff, attempt + 1);
+                await Task.Delay(backoff).ConfigureAwait(false);
+                continue;
+            }
+
+            if ((int)res.StatusCode < 200 || (int)res.StatusCode >= 300)
+                throw new Exception($"Rating {filmSlug} returned {(int)res.StatusCode}: {LetterboxdHttpClient.Truncate(body, 300)}");
+
+            // Only an explicit {"result": true} counts. A 200 can also be a sign-in or challenge
+            // page, and recording that as pushed would suppress every retry of this value.
+            var failure = SiteActionFailure(body);
+            if (failure != null)
+                throw new Exception($"Letterboxd did not confirm rating {rating} for {filmSlug}: {failure}");
+
+            _logger.LogInformation("Rated {Slug} {Rating} stars", filmSlug, rating);
+            _auth.ResetReauthGuard();
+            return;
+        }
+
+        throw new Exception($"Failed to rate {filmSlug} after {LetterboxdHttpClient.MaxRetries} attempts");
+    }
+
+    /// <summary>Half-stars (0.5 to 5.0) to the rate action's 0-10 integer scale.</summary>
+    internal static int ToRateEndpointScale(double rating)
+        => (int)Math.Clamp(Math.Round(rating * 2, MidpointRounding.AwayFromZero), 1, 10);
+
+    /// <summary>
+    /// Null when a site action's body is JSON with <c>"result": true</c>; otherwise why it does
+    /// not count as success (the messages of a <c>"result": false</c>, or a non-JSON body).
+    /// </summary>
+    internal static string? SiteActionFailure(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return "empty response";
+        if (!body.TrimStart().StartsWith('{'))
+            return "non-JSON response (likely a sign-in or challenge page)";
+
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.TryGetProperty("result", out var result) && result.ValueKind == JsonValueKind.True)
+                return null;
+
+            if (doc.RootElement.TryGetProperty("messages", out var messages) && messages.ValueKind == JsonValueKind.Array)
+            {
+                var texts = new List<string>();
+                foreach (var m in messages.EnumerateArray())
+                    texts.Add(m.ValueKind == JsonValueKind.String ? m.GetString() ?? string.Empty : m.GetRawText());
+                if (texts.Count > 0)
+                    return string.Join("; ", texts);
+            }
+
+            return "result was not true";
+        }
+        catch (JsonException)
+        {
+            return "unparseable JSON response";
+        }
+    }
+
     private static Dictionary<string, object?> BuildDiaryPayload(
         string endpoint, string filmId, string? productionId,
         DateTime viewingDate, bool liked, bool rewatch, double? rating)

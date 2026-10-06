@@ -18,7 +18,12 @@ public enum SyncStatus
     /// <summary>A watchlist sync successfully auto-requested a title via Seerr. Not a
     /// watch/diary outcome; see <see cref="SyncEventSources.SeerrAutoRequestFilm"/>/
     /// <see cref="SyncEventSources.SeerrAutoRequestTv"/> for which watchlist triggered it.</summary>
-    Requested
+    Requested,
+
+    /// <summary>A Jellyfin rating change was pushed to the member's Letterboxd film rating
+    /// (<see cref="SyncEventSources.Rating"/>). Deliberately not Success: it is not a diary
+    /// entry, so it must not count as a sync or satisfy the duplicate-entry backstop.</summary>
+    Rated
 }
 
 /// <summary>
@@ -35,6 +40,9 @@ public static class SyncEventSources
 
     /// <summary>SerializdWatchlistSyncRunner's Seerr auto-request step, for a Serializd (TV) watchlist.</summary>
     public const string SeerrAutoRequestTv = "seerr-auto-request-tv";
+
+    /// <summary>RatingSyncHandler pushed a Jellyfin rating change to the Letterboxd film rating.</summary>
+    public const string Rating = "rating";
 }
 
 public class SyncEvent
@@ -260,6 +268,8 @@ public static class SyncHistory
         {
             if (e.TmdbId != tmdbId) continue;
             if (!string.Equals(e.Username, username, StringComparison.Ordinal)) continue;
+            // A rating push says nothing about the film's diary sync, which is what callers rank by.
+            if (e.Status == SyncStatus.Rated) continue;
             if (latest == null || e.Timestamp > latest.Timestamp) latest = e;
         }
         return latest?.Status;
@@ -281,8 +291,11 @@ public static class SyncHistory
 
     internal static int GetConsecutiveFailureCount(IEnumerable<SyncEvent> events, string username, int tmdbId)
     {
+        // Rated events are skipped: a rating push neither continues nor breaks the film's diary
+        // failure streak.
         var ordered = events
-            .Where(e => e.TmdbId == tmdbId && string.Equals(e.Username, username, StringComparison.Ordinal))
+            .Where(e => e.TmdbId == tmdbId && string.Equals(e.Username, username, StringComparison.Ordinal)
+                && e.Status != SyncStatus.Rated)
             .OrderByDescending(e => e.Timestamp);
 
         var count = 0;
@@ -373,7 +386,9 @@ public static class SyncHistory
 
             var list = filtered.ToList();
             return (
-                list.Count,
+                // A rating push is not a logged film (the dashboards show Total as "Films logged"),
+                // the same way Serializd's stats leave reviews out of theirs.
+                list.Count(e => e.Status != SyncStatus.Rated),
                 list.Count(e => e.Status == SyncStatus.Success),
                 list.Count(e => e.Status == SyncStatus.Failed),
                 list.Count(e => e.Status == SyncStatus.Skipped),

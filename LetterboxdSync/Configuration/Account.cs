@@ -18,7 +18,7 @@ public class Account
     /// XML-serialized, encrypted form of <see cref="LetterboxdPassword"/> (see
     /// <see cref="SecretProtector"/>). Exists only so the on-disk config file never holds
     /// the password in plaintext; JsonIgnore keeps it out of the admin config page's
-    /// GET/PUT JSON round-trip (configPage.js echoes that payload back verbatim on save,
+    /// GET/PUT JSON round-trip (configPage.html echoes that payload back verbatim on save,
     /// which would otherwise clobber a freshly-typed password with stale ciphertext).
     /// Nothing outside this class and tests should read or write it directly, use
     /// <see cref="LetterboxdPassword"/>.
@@ -48,6 +48,13 @@ public class Account
     public bool Enabled { get; set; }
 
     public bool SyncFavorites { get; set; }
+
+    /// <summary>
+    /// When true, a rating changed in Jellyfin after (or without) a watch is pushed to this
+    /// account's Letterboxd film rating by <see cref="RatingSyncHandler"/>. Defaults on, which is
+    /// also what configs saved before this setting existed deserialize to.
+    /// </summary>
+    public bool SyncRatings { get; set; } = true;
 
     public bool EnableDateFilter { get; set; }
 
@@ -90,4 +97,11 @@ public class Account
     /// "Letterboxd Watchlist ({LetterboxdUsername})" so each account gets its own playlist.
     /// </summary>
     public string? PlaylistName { get; set; }
+
+    /// <summary>
+    /// Jellyfin library ids (CollectionFolder ids, "N" format) whose items this account never
+    /// exports, on the scheduled and real-time paths alike. Empty means every library syncs, which
+    /// is also what configs saved before this setting existed deserialize to. Import paths ignore it.
+    /// </summary>
+    public List<string> ExcludedLibraryIds { get; set; } = new List<string>();
 }
