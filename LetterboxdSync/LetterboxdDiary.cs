@@ -7,6 +7,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 
@@ -30,8 +31,11 @@ public class LetterboxdDiary
         _logger = logger;
     }
 
+    /// <param name="cancellationToken">Cancels the waits between attempts, never a request
+    /// already sent: a write cut off mid-flight may still have landed on the diary.</param>
     public async Task MarkAsWatchedAsync(string filmSlug, string filmId, DateTime? date, bool liked,
-        string? productionId = null, bool rewatch = false, double? rating = null)
+        string? productionId = null, bool rewatch = false, double? rating = null,
+        CancellationToken cancellationToken = default)
     {
         var viewingDate = date ?? DateTime.Now;
         _logger.LogDebug("MarkAsWatched: slug={Slug}, date={Date}, rewatch={Rewatch}, rating={Rating}",
@@ -62,7 +66,7 @@ public class LetterboxdDiary
                 case MarkResult.TransientError:
                     var delayMs = (attempt + 1) * 5000 + Random.Shared.Next(3000);
                     _logger.LogWarning("Transient error, retrying in {Delay}ms", delayMs);
-                    await Task.Delay(delayMs).ConfigureAwait(false);
+                    await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
                     continue;
 
                 case MarkResult.AllEndpoints404:
@@ -70,7 +74,7 @@ public class LetterboxdDiary
                     {
                         var d = (attempt + 1) * 5000 + Random.Shared.Next(3000);
                         _logger.LogWarning("All endpoints returned 404, retrying in {Delay}ms", d);
-                        await Task.Delay(d).ConfigureAwait(false);
+                        await Task.Delay(d, cancellationToken).ConfigureAwait(false);
                     }
                     continue;
             }
@@ -110,7 +114,7 @@ public class LetterboxdDiary
                 return MarkResult.NeedsReauth;
 
             if (res.StatusCode == HttpStatusCode.Forbidden)
-                throw new Exception($"Letterboxd returned 403 for {filmSlug}. Likely anti-bot.");
+                throw new LetterboxdBlockedException($"Letterboxd returned 403 for {filmSlug}. Likely anti-bot.");
 
             if ((int)res.StatusCode >= 200 && (int)res.StatusCode < 300)
             {
@@ -212,13 +216,19 @@ public class LetterboxdDiary
                 continue;
             }
 
-            _logger.LogInformation("Review response for {FilmSlug}: status={Status}, body={Body}",
-                filmSlug, (int)res.StatusCode, LetterboxdHttpClient.Truncate(body, 500));
-
+            // A successful reply can echo the review back, so it is logged by size only. A failed
+            // one usually carries the error, so a short start of it is kept for diagnosis, with the
+            // review itself cut out in case the error quotes it.
             if ((int)res.StatusCode < 200 || (int)res.StatusCode >= 300)
-                throw new Exception($"Review post returned {(int)res.StatusCode} for {filmSlug}: {LetterboxdHttpClient.Truncate(body, 300)}");
+            {
+                var excerpt = LetterboxdHttpClient.Truncate(WithoutReview(body, reviewText), 300);
+                _logger.LogWarning("Review post for {FilmSlug} failed: status={Status}, bodyLen={Len}, body={Body}",
+                    filmSlug, (int)res.StatusCode, body.Length, excerpt);
+                throw new Exception($"Review post returned {(int)res.StatusCode} for {filmSlug}: {excerpt}");
+            }
 
-            _logger.LogInformation("Posted review for {FilmSlug}", filmSlug);
+            _logger.LogInformation("Posted review for {FilmSlug}: status={Status}, bodyLen={Len}",
+                filmSlug, (int)res.StatusCode, body.Length);
             _auth.ResetReauthGuard();
             return;
         }
@@ -226,11 +236,28 @@ public class LetterboxdDiary
         throw new Exception($"Failed to post review for {filmSlug} after {LetterboxdHttpClient.MaxRetries} attempts");
     }
 
+    private const int MinReviewToCut = 6;
+
+    /// <summary>
+    /// Replaces the review text in a reply body, as typed or as it appears inside a JSON string,
+    /// with "[review]", so an error that quotes the submitted review never reaches a log line.
+    /// A review shorter than <see cref="MinReviewToCut"/> characters is left alone: cutting "ok"
+    /// out of every word of an error would destroy it, and so short a review reveals little.
+    /// </summary>
+    internal static string WithoutReview(string body, string? reviewText)
+    {
+        if (string.IsNullOrEmpty(body) || string.IsNullOrWhiteSpace(reviewText) || reviewText.Trim().Length < MinReviewToCut)
+            return body;
+        var jsonEscaped = JsonSerializer.Serialize(reviewText)[1..^1];
+        return body.Replace(reviewText, "[review]", StringComparison.Ordinal)
+                   .Replace(jsonEscaped, "[review]", StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// Sets the member's film rating through the site's rate action. Unlike the official API,
     /// this endpoint takes a 0-10 integer (half-stars x 2) and the numeric film id.
     /// </summary>
-    public async Task SetFilmRatingAsync(string filmSlug, string filmId, double rating)
+    public async Task SetFilmRatingAsync(string filmSlug, string filmId, double rating, CancellationToken cancellationToken = default)
     {
         var wireRating = ToRateEndpointScale(rating).ToString(CultureInfo.InvariantCulture);
 
@@ -268,7 +295,7 @@ public class LetterboxdDiary
                 var backoff = (attempt + 1) * 15000 + Random.Shared.Next(10000);
                 _logger.LogWarning("Rating {Slug} got 403. Backing off {Delay}ms (attempt {Attempt}/3)",
                     filmSlug, backoff, attempt + 1);
-                await Task.Delay(backoff).ConfigureAwait(false);
+                await Task.Delay(backoff, cancellationToken).ConfigureAwait(false);
                 continue;
             }
 

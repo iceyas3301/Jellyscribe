@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Security.Claims;
 using System.Threading.Tasks;
@@ -8,8 +9,11 @@ using LetterboxdSync.Configuration;
 using LetterboxdSync.Serializd;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Collections;
+using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Playlists;
+using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Serialization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -31,6 +35,7 @@ public class SerializdControllerTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly IUserManager _userManager;
+    private readonly ILibraryManager _libraryManager = Substitute.For<ILibraryManager>();
     private readonly SerializdController _controller;
 
     public SerializdControllerTests()
@@ -59,13 +64,15 @@ public class SerializdControllerTests : IDisposable
         var watchlistRunner = new SerializdWatchlistSyncRunner(new LoggerFactory(), Substitute.For<ILibraryManager>(),
             Substitute.For<IUserManager>(), Substitute.For<ICollectionManager>(), Substitute.For<IPlaylistManager>());
 
-        _controller = new SerializdController(new NullLogger<SerializdController>(), runner, watchlistRunner, _userManager);
+        _controller = new SerializdController(new NullLogger<SerializdController>(), runner, watchlistRunner, _userManager, _libraryManager);
+        LoginCheckLimiter.Serializd.ResetForTesting();
     }
 
     public void Dispose()
     {
         SerializdController.VerifyOverrideForTesting = null;
         SerializdServiceFactory.OverrideForTesting = null;
+        SerializdSeasonFallback.SeasonLengthsReader = SerializdSeasonFallback.ReadSeasonLengths;
         SerializdActivity.DataPathOverride = null;
         SerializdActivity.ResetForTesting();
         try { if (Directory.Exists(_tempDir)) Directory.Delete(_tempDir, true); } catch { }
@@ -87,10 +94,17 @@ public class SerializdControllerTests : IDisposable
         return (user, idHex);
     }
 
-    /// <summary>Points the controller's ControllerContext at an authenticated Jellyfin-UserId claim.</summary>
-    private void Authenticate(string userIdHex)
+    /// <summary>
+    /// Points the controller's ControllerContext at an authenticated Jellyfin-UserId claim, with the
+    /// role claim Jellyfin's authentication handler issues ("Administrator" or "User").
+    /// </summary>
+    private void Authenticate(string userIdHex, bool admin = false)
     {
-        var principal = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("Jellyfin-UserId", userIdHex) }, "Test"));
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(new[]
+        {
+            new Claim("Jellyfin-UserId", userIdHex),
+            new Claim(ClaimTypes.Role, admin ? "Administrator" : "User"),
+        }, "Test"));
         _controller.ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { User = principal } };
     }
 
@@ -119,6 +133,7 @@ public class SerializdControllerTests : IDisposable
     [Fact]
     public async Task Verify_GoodLogin_ReturnsOkWithUsername()
     {
+        Authenticate("aabbccddeeff00112233445566778899");
         SerializdController.VerifyOverrideForTesting = (_, _, _) => Task.FromResult<string?>("8bitproxy");
 
         var result = await _controller.Verify(
@@ -129,8 +144,34 @@ public class SerializdControllerTests : IDisposable
     }
 
     [Fact]
+    public async Task Verify_RepeatedFailures_AreRefusedWith429()
+    {
+        var (_, idHex) = AddUserWithAccount();
+        Authenticate(idHex);
+        var attempts = 0;
+        SerializdController.VerifyOverrideForTesting = (_, _, _) =>
+        {
+            attempts++;
+            throw new Exception("Serializd login failed (401): Incorrect password.");
+        };
+
+        for (var i = 0; i < LoginCheckLimiter.PerUserLimit; i++)
+            Assert.IsType<BadRequestObjectResult>(await _controller.Verify(
+                new SerializdController.VerifyRequest { Email = "me@example.com", Password = "wrong" + i }));
+
+        var refused = await _controller.Verify(
+            new SerializdController.VerifyRequest { Email = "me@example.com", Password = "wrong-again" });
+
+        var obj = Assert.IsAssignableFrom<ObjectResult>(refused);
+        Assert.Equal(StatusCodes.Status429TooManyRequests, obj.StatusCode);
+        Assert.StartsWith("Too many login checks", Prop<string>(refused, "error"));
+        Assert.Equal(LoginCheckLimiter.PerUserLimit, attempts);
+    }
+
+    [Fact]
     public async Task Verify_BadLogin_ReturnsBadRequest()
     {
+        Authenticate("aabbccddeeff00112233445566778899");
         SerializdController.VerifyOverrideForTesting = (_, _, _) =>
             throw new Exception("Serializd login failed (401): Incorrect password.");
 
@@ -244,6 +285,7 @@ public class SerializdControllerTests : IDisposable
         var (_, idHex) = AddUserWithAccount();
         Authenticate(idHex);
         var service = Substitute.For<ISerializdService>();
+        service.ResolveSeasonIdAsync(1396, 2).Returns(Task.FromResult<int?>(3573));
         SerializdServiceFactory.OverrideForTesting = (_, _, _) => Task.FromResult(service);
 
         var result = await _controller.PostReview(new SerializdController.ReviewRequest
@@ -255,9 +297,85 @@ public class SerializdControllerTests : IDisposable
         });
 
         Assert.IsType<OkObjectResult>(result);
-        await service.Received(1).CreateEpisodeReviewAsync(1396, 2, 5, 7, null, false);
+        // Serializd's own season id for season 2, the episode number unchanged.
+        await service.Received(1).CreateEpisodeReviewAsync(1396, 3573, 5, 7, null, false);
         await service.DidNotReceive().CreateShowReviewAsync(
             Arg.Any<int>(), Arg.Any<int?>(), Arg.Any<string?>(), Arg.Any<bool>());
+    }
+
+    /// <summary>A Serializd show listing one season: only season 1 resolves, with this many episodes.</summary>
+    private static ISerializdService SingleSeasonShow(int showTmdbId, int seasonOneId, int seasonOneEpisodes)
+    {
+        var service = Substitute.For<ISerializdService>();
+        service.ResolveSeasonIdAsync(showTmdbId, Arg.Any<int>()).Returns(Task.FromResult<int?>(null));
+        service.ResolveSeasonIdAsync(showTmdbId, 1).Returns(Task.FromResult<int?>(seasonOneId));
+        service.GetSeasonEpisodeCountAsync(showTmdbId, 1).Returns(Task.FromResult<int?>(seasonOneEpisodes));
+        return service;
+    }
+
+    /// <summary>The caller's library holds the series, so its season lengths can be read.</summary>
+    private Series SeriesInLibrary(int tmdbId)
+    {
+        var series = new Series { Name = "Show", Id = Guid.NewGuid() };
+        series.SetProviderId(MetadataProvider.Tmdb, tmdbId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        _libraryManager.GetItemList(Arg.Any<InternalItemsQuery>()).Returns(new List<BaseItem> { series });
+        return series;
+    }
+
+    [Fact]
+    public async Task PostReview_EpisodeOfAShowSerializdListsAsOneSeason_PostsOnSeasonOneAtTheAbsoluteNumber()
+    {
+        var (caller, idHex) = AddUserWithAccount();
+        Authenticate(idHex);
+        var series = SeriesInLibrary(220542);
+        Series? readFor = null;
+        SerializdSeasonFallback.SeasonLengthsReader = s =>
+        {
+            readFor = s;
+            return new Dictionary<int, int> { [1] = 10, [2] = 10 };
+        };
+        var service = SingleSeasonShow(220542, seasonOneId: 9001, seasonOneEpisodes: 20);
+        SerializdServiceFactory.OverrideForTesting = (_, _, _) => Task.FromResult(service);
+
+        var result = await _controller.PostReview(new SerializdController.ReviewRequest
+        {
+            TmdbId = 220542,
+            ReviewText = "great episode",
+            SeasonNumber = 2,
+            EpisodeNumber = 3,
+        });
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Same(series, readFor);
+        // The series is looked up in the caller's own library, never another user's.
+        _libraryManager.Received().GetItemList(Arg.Is<InternalItemsQuery>(q => q.User != null && q.User.Id == caller.Id));
+        await service.Received(1).CreateEpisodeReviewAsync(220542, 9001, 13, null, "great episode", false);
+    }
+
+    [Fact]
+    public async Task PostReview_EpisodePastTheEndOfSerializdsSingleSeason_IsRefused()
+    {
+        var (_, idHex) = AddUserWithAccount();
+        Authenticate(idHex);
+        SeriesInLibrary(220542);
+        SerializdSeasonFallback.SeasonLengthsReader = _ => new Dictionary<int, int> { [1] = 10, [2] = 10 };
+        // Serializd's season 1 has 12 episodes: S2E3 would be S1E13, past its end.
+        var service = SingleSeasonShow(220542, seasonOneId: 9001, seasonOneEpisodes: 12);
+        SerializdServiceFactory.OverrideForTesting = (_, _, _) => Task.FromResult(service);
+
+        var result = await _controller.PostReview(new SerializdController.ReviewRequest
+        {
+            TmdbId = 220542,
+            Rating = 8,
+            SeasonNumber = 2,
+            EpisodeNumber = 3,
+        });
+
+        var bad = Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Contains("no episode matching S2E3", System.Text.Json.JsonSerializer.Serialize(bad.Value));
+        await service.DidNotReceive().CreateEpisodeReviewAsync(
+            Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int?>(), Arg.Any<string?>(), Arg.Any<bool>());
+        Assert.Equal(0, SerializdActivity.GetPage(0, 10).Total);
     }
 
     [Fact]
@@ -450,7 +568,78 @@ public class SerializdControllerTests : IDisposable
         Assert.Equal("untouched@example.com", other.Email);
     }
 
+    // A household can share one Serializd account across Jellyfin users; the token cache is keyed
+    // by email + password hash, so this stays allowed.
+    [Fact]
+    public void PutAccounts_EmailAlsoLinkedByOtherUser_Saves()
+    {
+        var (_, idHex) = AddUserWithAccount(email: "mine@example.com");
+        Plugin.Instance!.Configuration.SerializdAccounts.Add(new SerializdAccount
+        {
+            UserJellyfinId = "someone-else",
+            Email = "household@example.com",
+            Password = "pw",
+            Enabled = true,
+        });
+        Authenticate(idHex);
+
+        var result = _controller.PutAccounts(new SerializdController.AccountsUpdateRequest
+        {
+            Accounts = new() { new SerializdController.AccountItem { Email = "household@example.com", Password = "pw", Enabled = true } }
+        });
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Equal("household@example.com", Plugin.Instance!.Configuration.SerializdAccounts.Single(a => a.UserJellyfinId == idHex).Email);
+        Assert.Contains(Plugin.Instance!.Configuration.SerializdAccounts, a => a.UserJellyfinId == "someone-else");
+    }
+
+    [Fact]
+    public void PutAccounts_SameUserResavesOwnEmail_Succeeds()
+    {
+        var (_, idHex) = AddUserWithAccount(email: "mine@example.com");
+        Authenticate(idHex);
+
+        var result = _controller.PutAccounts(new SerializdController.AccountsUpdateRequest
+        {
+            Accounts = new() { new SerializdController.AccountItem { Email = "mine@example.com", Password = "new", Enabled = true } }
+        });
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Equal("new", Plugin.Instance!.Configuration.SerializdAccounts.Single(a => a.UserJellyfinId == idHex).Password);
+    }
+
     // ----- GetStats / GetHistory -----
+
+    [Fact]
+    public void GetStats_UnresolvedUser_ReturnsBadRequest()
+    {
+        AddUserWithAccount();
+        Authenticate("ffffffffffffffffffffffffffffffff");
+
+        var result = _controller.GetStats();
+
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
+
+    [Fact]
+    public void GetHistory_UnresolvedUser_ReturnsBadRequest()
+    {
+        var (user, _) = AddUserWithAccount();
+        SerializdActivity.Record(new SyncEvent
+        {
+            FilmTitle = "Silo · S1E1",
+            TmdbId = 1,
+            Username = user.Username!,
+            Timestamp = DateTime.UtcNow,
+            Status = SyncStatus.Success,
+            Source = "playback",
+        });
+        _controller.ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() };
+
+        var result = _controller.GetHistory();
+
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
 
     [Fact]
     public void GetStats_ReturnsAggregateShape()
@@ -570,6 +759,26 @@ public class SerializdControllerTests : IDisposable
     }
 
     [Fact]
+    public void SyncWatchlistNow_WatchlistRunInProgress_ReturnsConflict()
+    {
+        var (_, idHex) = AddUserWithAccount();
+        Plugin.Instance!.Configuration.SerializdAccounts.Single(a => a.UserJellyfinId == idHex).SyncWatchlist = true;
+        Authenticate(idHex);
+        SerializdWatchlistSyncGate.Instance.Wait();
+        try
+        {
+            var result = _controller.SyncWatchlistNow();
+
+            Assert.IsType<ConflictObjectResult>(result);
+            Assert.Null(_controller.LastBackgroundSync);
+        }
+        finally
+        {
+            SerializdWatchlistSyncGate.Instance.Release();
+        }
+    }
+
+    [Fact]
     public void SyncWatchlistNow_NoAccountHasWatchlistSyncEnabled_ReturnsBadRequest()
     {
         // Enabled account exists, but SyncWatchlist is off (the default).
@@ -642,5 +851,54 @@ public class SerializdControllerTests : IDisposable
 
         Assert.Equal(new[] { anime },
             Plugin.Instance!.Configuration.SerializdAccounts.Single(a => a.UserJellyfinId == idHex).ExcludedLibraryIds);
+    }
+
+    // ----- Watchlist name is admin-only -----
+
+    [Fact]
+    public void PutAccounts_NonAdmin_CannotNameTheCollection_KeepsTheStoredName()
+    {
+        var (_, idHex) = AddUserWithAccount(email: "me@example.com");
+        Plugin.Instance!.Configuration.SerializdAccounts[0].WatchlistName = "Named By Admin";
+        Authenticate(idHex);
+
+        var result = _controller.PutAccounts(new SerializdController.AccountsUpdateRequest
+        {
+            Accounts = new()
+            {
+                new SerializdController.AccountItem { Email = "me@example.com", Enabled = true, WatchlistName = "Staff Picks" },
+                new SerializdController.AccountItem { Email = "new@example.com", Enabled = true, WatchlistName = "Staff Picks" },
+            }
+        });
+
+        Assert.IsType<OkObjectResult>(result);
+        var saved = Plugin.Instance!.Configuration.SerializdAccounts.Where(a => a.UserJellyfinId == idHex).ToList();
+        Assert.Equal("Named By Admin", saved.Single(a => a.Email == "me@example.com").WatchlistName);
+        Assert.Null(saved.Single(a => a.Email == "new@example.com").WatchlistName);
+    }
+
+    [Fact]
+    public void PutAccounts_Admin_CanNameTheCollection()
+    {
+        var (_, idHex) = AddUserWithAccount(email: "me@example.com");
+        Authenticate(idHex, admin: true);
+
+        _controller.PutAccounts(new SerializdController.AccountsUpdateRequest
+        {
+            Accounts = new() { new SerializdController.AccountItem { Email = "me@example.com", WatchlistName = " Our Shows " } }
+        });
+
+        Assert.Equal("Our Shows", Plugin.Instance!.Configuration.SerializdAccounts.Single(a => a.UserJellyfinId == idHex).WatchlistName);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GetAccounts_TellsThePageWhetherTheCallerMayNameTheCollection(bool admin)
+    {
+        var (_, idHex) = AddUserWithAccount();
+        Authenticate(idHex, admin);
+
+        Assert.Equal(admin, Prop<bool>(_controller.GetAccounts(), "canSetWatchlistName"));
     }
 }

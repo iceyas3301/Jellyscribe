@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Mime;
@@ -168,8 +169,9 @@ public class LetterboxdController : JellyfinUserApiController
     /// <summary>
     /// Returns the exact JSON the next telemetry ping would send. Admin-only: the payload
     /// contains the instance UUID plus a configuration fingerprint, the same policy as
-    /// the config page that displays it. Backs the settings "Preview exact JSON" modal,
-    /// which doubles as a copy-diagnostic-bundle for bug reports.
+    /// the config page that displays it. Backs the Integrations "Preview" dialog and the
+    /// Overview opt-in notice, whose Copy and "Copy + regenerate ID" actions double as a
+    /// diagnostic bundle for bug reports.
     /// </summary>
     [HttpGet("Telemetry/Preview")]
     [Authorize(Policy = "RequiresElevation")]
@@ -179,11 +181,11 @@ public class LetterboxdController : JellyfinUserApiController
         int? libraryCount;
         try
         {
-            libraryCount = _libraryManager.GetItemList(new InternalItemsQuery
+            libraryCount = _libraryManager.GetCount(new InternalItemsQuery
             {
                 IncludeItemTypes = new[] { BaseItemKind.Movie },
                 Recursive = true
-            }).Count;
+            });
         }
         catch
         {
@@ -194,11 +196,29 @@ public class LetterboxdController : JellyfinUserApiController
         return Content(json, "application/json");
     }
 
+    /// <summary>
+    /// Gives this server a new random telemetry instance id, the settings "Regenerate ID" and
+    /// "Copy + regenerate ID" actions. Admin-only, like the preview that shows the id. Later
+    /// pings and log bundles carry only the new id; rows already sent keep the old one.
+    /// </summary>
+    [HttpPost("Telemetry/RegenerateId")]
+    [Authorize(Policy = "RequiresElevation")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public ActionResult RegenerateTelemetryId()
+    {
+        return Ok(new { instanceId = TelemetryService.RegenerateInstanceId() });
+    }
+
     [HttpGet("Stats")]
     [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public ActionResult GetStats()
     {
+        // SyncHistory treats a null username as "everyone", so an unresolved caller must stop here.
         var jellyfinUsername = GetJellyfinUsername();
+        if (string.IsNullOrEmpty(jellyfinUsername))
+            return BadRequest(new { error = "Could not determine user" });
+
         var (total, success, failed, skipped, rewatches, requested) = SyncHistory.GetStats(jellyfinUsername);
         return Ok(new
         {
@@ -212,6 +232,9 @@ public class LetterboxdController : JellyfinUserApiController
         });
     }
 
+    /// <summary>The most rows one <c>/History</c> page returns.</summary>
+    internal const int MaxHistoryPage = 250;
+
     /// <summary>
     /// Paginated sync history. Returns the slice plus the total so the dashboard can
     /// render a paginator. Without an offset the response is backwards-compatible with
@@ -220,69 +243,17 @@ public class LetterboxdController : JellyfinUserApiController
     /// </summary>
     [HttpGet("History")]
     [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public ActionResult GetHistory([FromQuery] int count = 50, [FromQuery] int offset = 0)
     {
         var jellyfinUsername = GetJellyfinUsername();
-        var capped = Math.Min(Math.Max(count, 1), 200);
-        var (events, total) = SyncHistory.GetPage(Math.Max(offset, 0), capped, jellyfinUsername);
-        return Ok(new { events, total, offset = Math.Max(offset, 0), count = capped });
-    }
-
-    [HttpGet("Account")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public ActionResult GetAccount()
-    {
-        var userId = GetCurrentUserId();
-        if (string.IsNullOrEmpty(userId))
+        if (string.IsNullOrEmpty(jellyfinUsername))
             return BadRequest(new { error = "Could not determine user" });
 
-        var account = Config.Accounts.FirstOrDefault(a => a.UserJellyfinId == userId);
-        if (account == null)
-        {
-            return Ok(new
-            {
-                letterboxdUsername = string.Empty,
-                letterboxdPassword = string.Empty,
-                rawCookies = (string?)null,
-                userAgent = (string?)null,
-                enabled = false,
-                syncFavorites = false,
-                syncRatings = true,
-                enableDateFilter = false,
-                dateFilterDays = 7,
-                enableWatchlistSync = false,
-                enableDiaryImport = false,
-                autoRequestWatchlist = false,
-                mirrorJellyseerrWatchlist = false,
-                skipPreviouslySynced = true,
-                stopOnFailure = false,
-                excludedLibraryIds = new List<string>(),
-                isConfigured = false
-            });
-        }
-
-        return Ok(new
-        {
-            letterboxdUsername = account.LetterboxdUsername,
-            letterboxdPassword = account.LetterboxdPassword,
-            rawCookies = account.RawCookies,
-            userAgent = account.UserAgent,
-            enabled = account.Enabled,
-            syncFavorites = account.SyncFavorites,
-            syncRatings = account.SyncRatings,
-            enableDateFilter = account.EnableDateFilter,
-            dateFilterDays = account.DateFilterDays,
-            enableWatchlistSync = account.EnableWatchlistSync,
-            enableDiaryImport = account.EnableDiaryImport,
-            autoRequestWatchlist = account.AutoRequestWatchlist,
-            backfillAvailableRequests = account.BackfillAvailableRequests,
-            mirrorJellyseerrWatchlist = account.MirrorJellyseerrWatchlist,
-            skipPreviouslySynced = account.SkipPreviouslySynced,
-            stopOnFailure = account.StopOnFailure,
-            excludedLibraryIds = account.ExcludedLibraryIds,
-            isConfigured = true
-        });
+        // Both dashboards ask for 250 rows a page; a lower cap here silently shortened their pages.
+        var capped = Math.Clamp(count, 1, MaxHistoryPage);
+        var (events, total) = SyncHistory.GetPage(Math.Max(offset, 0), capped, jellyfinUsername);
+        return Ok(new { events, total, offset = Math.Max(offset, 0), count = capped });
     }
 
     /// <summary>
@@ -328,34 +299,53 @@ public class LetterboxdController : JellyfinUserApiController
     /// <summary>
     /// Checks Letterboxd credentials the way sync will use them: the official API first, then the
     /// website login (with the optional raw cookies and user agent). Reports which one worked, or
-    /// both reasons. Saves nothing and does not touch the auth breaker.
+    /// both reasons. Saves nothing and does not touch the auth breaker. An empty password or cookie
+    /// field uses the stored account with this username, so a saved login can be re-checked
+    /// without the secret ever going back to the browser. Failed checks are rate-limited per
+    /// user and server-wide (<see cref="LoginCheckLimiter"/>), answering 429.
     /// </summary>
     [HttpPost("Verify")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<ActionResult> VerifyLogin([FromBody] LetterboxdVerifyRequest request)
     {
         var username = request?.LetterboxdUsername?.Trim();
-        if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(request!.LetterboxdPassword))
+        if (string.IsNullOrEmpty(username))
+            return BadRequest(new { error = "Username and password are required." });
+
+        var stored = Config.FindStored(GetCredentialOwnerId(request!.UserJellyfinId) ?? string.Empty,
+            SecretMerge.OriginalOr(request.OriginalLetterboxdUsername, username));
+        var password = SecretMerge.KeepIfEmpty(request.LetterboxdPassword, stored?.LetterboxdPassword);
+        var rawCookies = SecretMerge.TypedClearedOrKept(request.RawCookies, request.ClearRawCookies, stored?.RawCookies);
+        if (string.IsNullOrEmpty(password))
             return BadRequest(new { error = "Username and password are required." });
 
         var emailError = EmailAsUsernameError(username);
         if (emailError != null)
             return BadRequest(new { error = emailError });
 
+        var limiterKey = GetCurrentUserId() ?? string.Empty;
+        if (!LoginCheckLimiter.Letterboxd.TryAcquire(limiterKey, out var stamp, out var retryAfter))
+        {
+            _logger.LogWarning("Letterboxd login check refused for {UserId}: rate limit reached", limiterKey);
+            return TooManyLoginChecks(retryAfter);
+        }
+
         string apiError;
         try
         {
             if (VerifyApiLoginForTesting != null)
             {
-                await VerifyApiLoginForTesting(username, request.LetterboxdPassword).ConfigureAwait(false);
+                await VerifyApiLoginForTesting(username, password).ConfigureAwait(false);
             }
             else
             {
                 using var api = new LetterboxdApiClient(_logger);
-                await api.AuthenticateAsync(username, request.LetterboxdPassword).ConfigureAwait(false);
+                await api.AuthenticateAsync(username, password).ConfigureAwait(false);
             }
 
+            LoginCheckLimiter.Letterboxd.Refund(limiterKey, stamp);
             return Ok(new { ok = true, via = "api" });
         }
         catch (Exception ex)
@@ -367,14 +357,15 @@ public class LetterboxdController : JellyfinUserApiController
         {
             if (VerifyWebsiteLoginForTesting != null)
             {
-                await VerifyWebsiteLoginForTesting(username, request.LetterboxdPassword, request.RawCookies, request.UserAgent).ConfigureAwait(false);
+                await VerifyWebsiteLoginForTesting(username, password, rawCookies, request.UserAgent).ConfigureAwait(false);
             }
             else
             {
                 using var website = new ScrapingLetterboxdService(_logger, request.UserAgent);
-                await website.AuthenticateAsync(username, request.LetterboxdPassword, request.RawCookies).ConfigureAwait(false);
+                await website.AuthenticateAsync(username, password, rawCookies).ConfigureAwait(false);
             }
 
+            LoginCheckLimiter.Letterboxd.Refund(limiterKey, stamp);
             return Ok(new { ok = true, via = "website", apiError });
         }
         catch (Exception ex)
@@ -386,66 +377,10 @@ public class LetterboxdController : JellyfinUserApiController
         }
     }
 
-    [HttpPut("Account")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public ActionResult PutAccount([FromBody] AccountUpdateRequest request)
-    {
-        var userId = GetCurrentUserId();
-        if (string.IsNullOrEmpty(userId))
-            return BadRequest(new { error = "Could not determine user" });
-
-        if (EmailAsUsernameError(request.LetterboxdUsername) is { } emailError)
-            return BadRequest(new { error = emailError });
-
-        var account = Config.Accounts.FirstOrDefault(a => a.UserJellyfinId == userId);
-        if (account == null)
-        {
-            account = new Account { UserJellyfinId = userId };
-            Config.Accounts.Add(account);
-        }
-
-        account.LetterboxdUsername = request.LetterboxdUsername;
-        account.LetterboxdPassword = request.LetterboxdPassword;
-        account.RawCookies = request.RawCookies;
-        account.UserAgent = request.UserAgent;
-        account.Enabled = request.Enabled;
-        account.SyncFavorites = request.SyncFavorites;
-        account.SyncRatings = request.SyncRatings ?? account.SyncRatings;
-        account.EnableDateFilter = request.EnableDateFilter;
-        account.DateFilterDays = request.DateFilterDays;
-        account.EnableWatchlistSync = request.EnableWatchlistSync;
-        account.EnableDiaryImport = request.EnableDiaryImport;
-        account.AutoRequestWatchlist = request.AutoRequestWatchlist;
-        account.BackfillAvailableRequests = request.BackfillAvailableRequests;
-        account.MirrorJellyseerrWatchlist = request.MirrorJellyseerrWatchlist;
-        account.SkipPreviouslySynced = request.SkipPreviouslySynced;
-        account.StopOnFailure = request.StopOnFailure;
-        account.ExcludedLibraryIds = LibraryExclusion.ResolveForSave(request.ExcludedLibraryIds, account.ExcludedLibraryIds);
-
-        // IsPrimary and PlaylistName are deliberately NOT copied from the request.
-        // The userPage form does not expose them; deserialisation would set them to
-        // their type defaults (false / null) and clobber values that only the admin
-        // config page sets. Treat them as admin-managed and let NormalisePrimaryFlags
-        // promote a new account to primary when it's the user's only enabled one.
-        Config.NormalisePrimaryFlags();
-
-        Plugin.Instance!.SaveConfiguration();
-
-        // Credentials were just (re-)persisted: close any open auth breaker so the
-        // next run attempts login with the new values (issue #103's reset path).
-        AuthBreaker.Reset(userId, account.LetterboxdUsername);
-
-        _logger.LogInformation("User {UserId} saved their Letterboxd account settings", userId);
-
-        return Ok(new { success = true });
-    }
-
     /// <summary>
     /// Returns every Letterboxd account belonging to the calling Jellyfin user, in
-    /// config order with primary first. Multi-account companion to the single-account
-    /// /Account endpoint: the userPage uses this to render the full list of accounts
-    /// the user can edit on their own sidebar page.
+    /// config order with primary first. The userPage uses this to render the full list
+    /// of accounts the user can edit on their own sidebar page.
     /// </summary>
     [HttpGet("Accounts")]
     [ProducesResponseType(StatusCodes.Status200OK)]
@@ -462,8 +397,8 @@ public class LetterboxdController : JellyfinUserApiController
             .Select(a => new
             {
                 letterboxdUsername = a.LetterboxdUsername,
-                letterboxdPassword = a.LetterboxdPassword,
-                rawCookies = a.RawCookies,
+                hasPassword = a.HasPassword,
+                hasCookies = a.HasRawCookies,
                 userAgent = a.UserAgent,
                 authPaused = AuthBreaker.IsOpen(userId, a.LetterboxdUsername),
                 authPausedSince = AuthBreaker.GetState(userId, a.LetterboxdUsername)?.FirstFailureUtc,
@@ -485,7 +420,8 @@ public class LetterboxdController : JellyfinUserApiController
             })
             .ToList();
 
-        return Ok(new { accounts });
+        // Naming is admin-only (see PutAccounts); the page hides the field for everyone else.
+        return Ok(new { accounts, canSetWatchlistName = CallerIsAdministrator() });
     }
 
     /// <summary>
@@ -523,21 +459,24 @@ public class LetterboxdController : JellyfinUserApiController
         var preserved = Config.Accounts.Where(a => a.UserJellyfinId != userId).ToList();
         var previous = Config.Accounts.Where(a => a.UserJellyfinId == userId).ToList();
 
+        var canName = CallerIsAdministrator();
         var mine = new List<Account>();
         foreach (var req in request.Accounts)
         {
-            mine.Add(new Account
+            // A rename names the username it started from, so the stored secrets and settings follow it.
+            var storedName = SecretMerge.OriginalOr(req.OriginalLetterboxdUsername, req.LetterboxdUsername);
+            var stored = previous.FirstOrDefault(p => string.Equals(p.LetterboxdUsername, storedName?.Trim(), StringComparison.OrdinalIgnoreCase));
+            var account = new Account
             {
                 UserJellyfinId = userId,
                 LetterboxdUsername = req.LetterboxdUsername,
-                LetterboxdPassword = req.LetterboxdPassword,
+                LetterboxdPassword = req.LetterboxdPassword ?? string.Empty,
                 RawCookies = req.RawCookies,
+                ClearRawCookies = req.ClearRawCookies,
                 UserAgent = req.UserAgent,
                 Enabled = req.Enabled,
                 SyncFavorites = req.SyncFavorites,
-                SyncRatings = req.SyncRatings
-                    ?? previous.FirstOrDefault(p => string.Equals(p.LetterboxdUsername, req.LetterboxdUsername, StringComparison.OrdinalIgnoreCase))?.SyncRatings
-                    ?? true,
+                SyncRatings = req.SyncRatings ?? stored?.SyncRatings ?? true,
                 EnableDateFilter = req.EnableDateFilter,
                 DateFilterDays = req.DateFilterDays,
                 EnableWatchlistSync = req.EnableWatchlistSync,
@@ -548,11 +487,17 @@ public class LetterboxdController : JellyfinUserApiController
                 SkipPreviouslySynced = req.SkipPreviouslySynced,
                 StopOnFailure = req.StopOnFailure,
                 IsPrimary = req.IsPrimary,
-                PlaylistName = string.IsNullOrWhiteSpace(req.PlaylistName) ? null : req.PlaylistName.Trim(),
+                // Admin-only, like the Serializd watchlist name: the playlist is found by name among the
+                // playlists this user can see, which can include ones shared with them, so a chosen
+                // name could aim the sync at someone else's playlist. Anyone else keeps the stored value.
+                PlaylistName = canName
+                    ? (string.IsNullOrWhiteSpace(req.PlaylistName) ? null : req.PlaylistName.Trim())
+                    : stored?.PlaylistName,
                 // A client that omits the field keeps the account's stored exclusions.
-                ExcludedLibraryIds = LibraryExclusion.ResolveForSave(req.ExcludedLibraryIds,
-                    previous.FirstOrDefault(p => string.Equals(p.LetterboxdUsername, req.LetterboxdUsername, StringComparison.OrdinalIgnoreCase))?.ExcludedLibraryIds)
-            });
+                ExcludedLibraryIds = LibraryExclusion.ResolveForSave(req.ExcludedLibraryIds, stored?.ExcludedLibraryIds)
+            };
+            account.KeepSecretsFrom(stored);
+            mine.Add(account);
         }
 
         Config.Accounts.Clear();
@@ -571,40 +516,31 @@ public class LetterboxdController : JellyfinUserApiController
         return Ok(new { success = true, count = mine.Count });
     }
 
-    [HttpPost("TestConnection")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<ActionResult> TestConnection([FromBody] TestConnectionRequest request)
-    {
-        if (string.IsNullOrWhiteSpace(request.LetterboxdUsername) || string.IsNullOrWhiteSpace(request.LetterboxdPassword))
-            return BadRequest(new { success = false, error = "Username and password are required" });
+    /// <summary>Test-only transport for <see cref="TestJellyseerr"/>. Production never assigns it.</summary>
+    internal static System.Net.Http.HttpMessageHandler? SeerrTestHandlerForTesting;
 
-        try
-        {
-            using var service = await LetterboxdServiceFactory.CreateAuthenticatedAsync(
-                request.LetterboxdUsername, request.LetterboxdPassword, request.RawCookies, _logger, request.UserAgent)
-                .ConfigureAwait(false);
-
-            return Ok(new { success = true, letterboxdUsername = request.LetterboxdUsername });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning("Test connection failed for {Username}: {Message}", request.LetterboxdUsername, ex.Message);
-            return BadRequest(new { success = false, error = ex.Message });
-        }
-    }
-
+    /// <summary>
+    /// Checks the Seerr URL and API key from the admin settings form. Admin-only, because it
+    /// makes the server GET any URL; failures return a fixed message so the response never
+    /// describes what answered (or did not answer) at that address.
+    /// </summary>
     [HttpPost("TestJellyseerr")]
+    [Authorize(Policy = "RequiresElevation")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<ActionResult> TestJellyseerr([FromBody] JellyseerrTestRequest request)
     {
-        if (!SeerrClient.IsConfigured(request.Url, request.ApiKey))
+        // An empty key uses the stored one, but only against the stored URL, so the saved key is
+        // never sent to an address the admin didn't save it for.
+        var apiKey = string.IsNullOrEmpty(request.ApiKey) && SecretMerge.IsStoredUrl(request.Url, Config.JellyseerrUrl)
+            ? Config.JellyseerrApiKey
+            : request.ApiKey;
+        if (!SeerrClient.IsConfigured(request.Url, apiKey))
             return BadRequest(new { success = false, error = "URL and API key are required" });
 
         try
         {
-            using var client = new SeerrClient(request.Url!, request.ApiKey!, _logger);
+            using var client = new SeerrClient(request.Url!, apiKey!, _logger, SeerrTestHandlerForTesting);
             var userId = await client.GetJellyseerrUserIdAsync(GetCurrentUserId() ?? string.Empty)
                 .ConfigureAwait(false);
             return Ok(new
@@ -616,8 +552,10 @@ public class LetterboxdController : JellyfinUserApiController
         }
         catch (Exception ex)
         {
+            // The exception text names hosts, ports and TLS details of whatever the URL points
+            // at, so it goes to the server log only and the caller gets a fixed message.
             _logger.LogWarning("Seerr test failed: {Message}", ex.Message);
-            return BadRequest(new { success = false, error = ex.Message });
+            return BadRequest(new { success = false, error = "Could not connect to Seerr with that URL and API key. The server log has the details." });
         }
     }
 
@@ -628,9 +566,28 @@ public class LetterboxdController : JellyfinUserApiController
     {
         if (string.IsNullOrWhiteSpace(request.FilmSlug))
             return BadRequest(new { error = "filmSlug is required" });
+        if (request.FilmSlug.Any(char.IsControl))
+            return BadRequest(new { error = "filmSlug is not a Letterboxd film slug" });
 
-        if (string.IsNullOrWhiteSpace(request.ReviewText) && !request.IsRewatch)
-            return BadRequest(new { error = "reviewText is required unless logging a rewatch" });
+        // A rating with no text and no rewatch is not a diary entry (Letterboxd refuses an empty
+        // review): it sets the member's film rating instead, the same call RatingSyncHandler makes.
+        var ratingOnly = string.IsNullOrWhiteSpace(request.ReviewText) && !request.IsRewatch && request.Rating.HasValue;
+        if (string.IsNullOrWhiteSpace(request.ReviewText) && !request.IsRewatch && !ratingOnly)
+            return BadRequest(new { error = "reviewText is required unless logging a rewatch or setting a rating" });
+
+        // The diary date goes to Letterboxd and onto the history row, which needs it to read it back.
+        if (!string.IsNullOrEmpty(request.Date)
+            && !DateTime.TryParseExact(request.Date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+            return BadRequest(new { error = "date must be a day in the form yyyy-MM-dd" });
+
+        if (ratingOnly)
+        {
+            var r = request.Rating!.Value;
+            if (!double.IsFinite(r) || r < 0.5 || r > 5.0 || Math.Abs((r * 2) - Math.Round(r * 2)) > 1e-9)
+                return BadRequest(new { error = "A rating must be from 0.5 to 5 stars, in half stars" });
+            if (request.TmdbId is not > 0)
+                return BadRequest(new { error = "A rating on its own needs the film's TMDb id" });
+        }
 
         var userId = GetCurrentUserId();
         if (string.IsNullOrEmpty(userId))
@@ -657,7 +614,7 @@ public class LetterboxdController : JellyfinUserApiController
         var jellyfinUsername = GetJellyfinUsername() ?? userId;
         var perAccount = new List<object>();
         var anySuccess = false;
-        Exception? lastError = null;
+        string? lastError = null;
 
         foreach (var account in accounts)
         {
@@ -667,29 +624,91 @@ public class LetterboxdController : JellyfinUserApiController
                     account.LetterboxdUsername, account.LetterboxdPassword, account.RawCookies, _logger, account.UserAgent)
                     .ConfigureAwait(false);
 
-                await service.PostReviewAsync(request.FilmSlug, request.ReviewText, request.ContainsSpoilers, request.IsRewatch, request.Date, request.Rating, request.TmdbId)
-                    .ConfigureAwait(false);
+                if (ratingOnly)
+                {
+                    await SetFilmRatingAsync(service, account, userId, jellyfinUsername, request).ConfigureAwait(false);
+                    perAccount.Add(new { letterboxdUsername = account.LetterboxdUsername, success = true });
+                    anySuccess = true;
+                    continue;
+                }
 
-                _logger.LogInformation("Posted review for {FilmSlug} by {Username}",
-                    request.FilmSlug, account.LetterboxdUsername);
+                // Held like the syncs hold it, so a sync of this film cannot log it between the
+                // history lookup below and the review's own history row.
+                using var filmLock = request.TmdbId is > 0
+                    ? await FilmSyncLock.AcquireAsync(userId.ToLowerInvariant(), account.LetterboxdUsername, request.TmdbId.Value).ConfigureAwait(false)
+                    : null;
+
+                // A review of a film this plugin already logged for the account goes on that diary
+                // entry. Posting it as a new entry would log a second watch, dated today.
+                var loggedOn = !request.IsRewatch && string.IsNullOrEmpty(request.Date)
+                    && !string.IsNullOrWhiteSpace(request.ReviewText) && request.TmdbId is > 0
+                    ? SyncHistory.GetLastSuccessfulSyncDate(jellyfinUsername, request.TmdbId.Value, account.LetterboxdUsername)
+                    : null;
+
+                // Today is the server's local day, the same day a sync would log a watch on.
+                var postDate = string.IsNullOrEmpty(request.Date)
+                    ? Helpers.ToLocalViewingDate(DateTime.UtcNow).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+                    : request.Date;
+                var addedToEntry = false;
+                string? note = null;
+                if (loggedOn is { } entryDate)
+                {
+                    var entryDay = entryDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+                    var outcome = await service.AddReviewToDiaryEntryAsync(request.TmdbId!.Value, entryDate, request.ReviewText!,
+                        request.ContainsSpoilers, request.Rating).ConfigureAwait(false);
+                    if (outcome == ReviewAttachResult.AlreadyReviewed)
+                    {
+                        // Not a sync failure, so no Failed row: nothing was sent, and the film's diary sync is unaffected.
+                        lastError = $"Your Letterboxd diary entry for this film on {entryDay} already has a review, so it was left as it is. Edit that review on Letterboxd.";
+                        perAccount.Add(new { letterboxdUsername = account.LetterboxdUsername, success = false, error = lastError });
+                        continue;
+                    }
+
+                    addedToEntry = outcome == ReviewAttachResult.Attached;
+                    postDate = entryDay;
+                    if (outcome == ReviewAttachResult.Unsupported)
+                        note = $"The Letterboxd website login cannot add a review to an existing diary entry, so the review was posted as a new entry dated {entryDay}.";
+                    else if (outcome == ReviewAttachResult.NoEntry)
+                        note = $"Letterboxd has no diary entry for this film on {entryDay}, so the review was posted as a new entry on that date.";
+                }
+
+                if (!addedToEntry)
+                    await service.PostReviewAsync(request.FilmSlug, request.ReviewText, request.ContainsSpoilers, request.IsRewatch, postDate, request.Rating, request.TmdbId)
+                        .ConfigureAwait(false);
+
+                _logger.LogInformation("Posted review for {FilmSlug} by {Username} ({Where})",
+                    request.FilmSlug, account.LetterboxdUsername, addedToEntry ? "on the existing diary entry" : "as a new diary entry");
 
                 var status = request.IsRewatch ? SyncStatus.Rewatch : SyncStatus.Success;
                 SyncHistory.Record(new SyncEvent
                 {
                     FilmTitle = request.FilmSlug.Replace("-", " "),
                     FilmSlug = request.FilmSlug,
+                    TmdbId = request.TmdbId is > 0 ? request.TmdbId.Value : 0,
                     Username = jellyfinUsername,
+                    Account = account.LetterboxdUsername,
                     Timestamp = DateTime.UtcNow,
+                    ViewingDate = DateTime.ParseExact(postDate, "yyyy-MM-dd", CultureInfo.InvariantCulture),
                     Status = status,
                     Source = "review"
                 });
 
-                perAccount.Add(new { letterboxdUsername = account.LetterboxdUsername, success = true });
+                perAccount.Add(new { letterboxdUsername = account.LetterboxdUsername, success = true, addedToEntry, note });
                 anySuccess = true;
+            }
+            catch (Exception ex) when (ratingOnly)
+            {
+                // Logged, not recorded as a Failed event, as RatingSyncHandler does: Failed rows feed
+                // the diary sync's per-film rules, and a rating that did not land must not touch them.
+                // The reply carries the one-line, length-capped form: the raw message can quote a response body.
+                lastError = AuthBreaker.Sanitize(ex.Message) ?? "Failed to set the rating";
+                _logger.LogError("Failed to set the rating on {FilmSlug} as {LbUser}: {Message}",
+                    request.FilmSlug, account.LetterboxdUsername, lastError);
+                perAccount.Add(new { letterboxdUsername = account.LetterboxdUsername, success = false, error = lastError });
             }
             catch (Exception ex)
             {
-                lastError = ex;
+                lastError = AuthBreaker.Sanitize(ex.Message) ?? "Failed to post the review";
                 _logger.LogError("Failed to post review for {FilmSlug} as {LbUser}: {Message}",
                     request.FilmSlug, account.LetterboxdUsername, ex.Message);
 
@@ -704,7 +723,7 @@ public class LetterboxdController : JellyfinUserApiController
                     Source = "review"
                 });
 
-                perAccount.Add(new { letterboxdUsername = account.LetterboxdUsername, success = false, error = ex.Message });
+                perAccount.Add(new { letterboxdUsername = account.LetterboxdUsername, success = false, error = lastError });
             }
         }
 
@@ -715,17 +734,49 @@ public class LetterboxdController : JellyfinUserApiController
             WriteJellyfinRating(userId, request.TmdbId, request.Rating);
 
         if (!anySuccess && lastError != null)
-            return BadRequest(new { error = lastError.Message, accounts = perAccount });
+            return BadRequest(new { error = lastError, accounts = perAccount });
 
-        return Ok(new { success = true, accounts = perAccount });
+        return Ok(new { success = true, ratedOnly = ratingOnly, accounts = perAccount });
+    }
+
+    /// <summary>
+    /// A rating-only review: sets the member's Letterboxd film rating (not a diary entry) and
+    /// records it the way <see cref="RatingSyncHandler"/> does, as a Rated event and the value
+    /// last pushed, so the handler does not push the same rating again.
+    /// </summary>
+    private static async Task SetFilmRatingAsync(ILetterboxdService service, Account account, string userId, string jellyfinUsername, ReviewRequest request)
+    {
+        var tmdbId = request.TmdbId!.Value;
+        var stars = request.Rating!.Value;
+        // The film id must come from this same service instance: the API and the website use different ids.
+        var film = await service.LookupFilmByTmdbIdAsync(tmdbId).ConfigureAwait(false);
+        await service.SetFilmRatingAsync(film.Slug, film.FilmId, stars).ConfigureAwait(false);
+
+        RatingPushStore.RecordPushed(userId, account.LetterboxdUsername, tmdbId, stars);
+        // One plain line: control characters become spaces, and no " · ", which the dashboards read as the title's end.
+        var title = string.Join(' ', new string((request.Title ?? string.Empty).Select(c => char.IsControl(c) ? ' ' : c).ToArray())
+            .Replace('·', '-').Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        if (title.Length == 0) title = request.FilmSlug.Replace("-", " ");
+        if (title.Length > 200) title = title[..200];
+        SyncHistory.Record(new SyncEvent
+        {
+            FilmTitle = $"{title} · Rated {stars.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)} stars",
+            FilmSlug = film.Slug,
+            TmdbId = tmdbId,
+            Username = jellyfinUsername,
+            Account = account.LetterboxdUsername,
+            Timestamp = DateTime.UtcNow,
+            Status = SyncStatus.Rated,
+            Source = SyncEventSources.Rating
+        });
     }
 
     /// <summary>
     /// Returns the most recent LetterboxdSync log lines from Jellyfin's log files,
     /// for in-dashboard debugging and "send me your logs" support flows.
     /// Reads only LetterboxdSync-tagged lines so users can share without leaking
-    /// unrelated server activity. The plugin already redacts review text and never
-    /// logs auth tokens, passwords, or cookies, so this output is safe to share.
+    /// unrelated server activity. The plugin never logs review text, auth tokens,
+    /// passwords or cookies, and the reader masks email addresses.
     /// </summary>
     [HttpGet("Logs")]
     [Authorize(Policy = "RequiresElevation")] // raw server logs name every user's Letterboxd account + watched films; admin-only
@@ -758,8 +809,9 @@ public class LetterboxdController : JellyfinUserApiController
     /// Reads ALL recent LetterboxdSync-tagged lines from Jellyfin's two newest main
     /// log files (covering a just-rolled-over file), untrimmed. Shared by the Logs tab
     /// and the "Send logs to developer" bundle; each caller caps as it sees fit. The
-    /// plugin never logs auth tokens, passwords, cookies, or review text, so these
-    /// lines are safe to share.
+    /// plugin never logs auth tokens, passwords, cookies, or review text, and every
+    /// email address is replaced with [email]. The lines still name films, shows,
+    /// Jellyfin users and Letterboxd usernames.
     /// </summary>
     private (List<string> Lines, string? Source, string? Error) ReadRecentLogLines()
     {
@@ -789,17 +841,23 @@ public class LetterboxdController : JellyfinUserApiController
                 // too (until the next timestamped header) or the most useful diagnostic, the
                 // stack trace, gets shredded by a per-line filter.
                 var inMatch = false;
+                var inLegacyReviewBody = false;
                 while ((line = sr.ReadLine()) != null)
                 {
-                    line = StripAnsi(line);
+                    // Emails are masked here, in the one reader behind the Logs tab, the bundle
+                    // preview and the send, so all three show the same lines.
+                    line = LogRedaction.RedactEmails(StripAnsi(line));
                     var isHeader = IsLogHeader(line);
                     if (isHeader)
                     {
                         inMatch = line.Contains("LetterboxdSync", StringComparison.Ordinal) ||
                                   line.Contains("Letterboxd ", StringComparison.Ordinal);
+                        // Older releases logged the review reply's body, which can echo the review;
+                        // such a line keeps its status and loses the body, continuation lines included.
+                        inLegacyReviewBody = inMatch && LogRedaction.TryCutLegacyReviewBody(ref line);
                         if (inMatch) lines.Add(line);
                     }
-                    else if (inMatch)
+                    else if (inMatch && !inLegacyReviewBody)
                     {
                         lines.Add(line); // continuation of a matched entry (stack frame / message)
                     }
@@ -815,15 +873,12 @@ public class LetterboxdController : JellyfinUserApiController
         }
     }
 
-    /// <summary>
-    /// User-initiated "send logs to developer". Builds a diagnostic bundle (recent
-    /// sanitized log lines + the current telemetry snapshot + versions) and uploads
-    /// it to the private telemetry backend, returning a short reference code the user
-    /// can quote in a bug report. Admin-only. Unlike telemetry this is NOT anonymous
-    /// (logs may contain a Letterboxd username or film titles) and only runs on this
-    /// explicit, disclosed action. Works whether or not telemetry is enabled; if no
-    /// telemetry instance id exists, a one-off id is generated for the bundle.
-    /// </summary>
+    // The id a bundle carries when telemetry never made one: one per server run, so the
+    // preview shows the same id the send then uploads.
+    private static readonly string OneOffBundleId = Guid.NewGuid().ToString();
+
+    private const int MaxNoteLength = 2000;
+
     /// <summary>
     /// Assembles the exact diagnostic bundle JSON for the calling server. Used by both
     /// the preview and the send so they cannot diverge: what the preview shows is byte
@@ -831,6 +886,12 @@ public class LetterboxdController : JellyfinUserApiController
     /// </summary>
     private (string Json, int MatchedLines) BuildLogBundleJson(string? note)
     {
+        // The ingest Worker keeps the first 2000 characters of a note (worker/src/index.ts);
+        // cut it here so the preview shows what is kept, never splitting a surrogate pair.
+        if (string.IsNullOrEmpty(note)) note = null;
+        else if (note.Length > MaxNoteLength)
+            note = note[..(char.IsHighSurrogate(note[MaxNoteLength - 1]) ? MaxNoteLength - 1 : MaxNoteLength)];
+
         var (allLines, source, error) = ReadRecentLogLines();
         var matched = allLines.Count;
         var lines = allLines.Count > 500 ? allLines.GetRange(allLines.Count - 500, 500) : allLines;
@@ -845,11 +906,11 @@ public class LetterboxdController : JellyfinUserApiController
         int? libraryCount;
         try
         {
-            libraryCount = _libraryManager.GetItemList(new InternalItemsQuery
+            libraryCount = _libraryManager.GetCount(new InternalItemsQuery
             {
                 IncludeItemTypes = new[] { BaseItemKind.Movie },
                 Recursive = true
-            }).Count;
+            });
         }
         catch
         {
@@ -859,7 +920,7 @@ public class LetterboxdController : JellyfinUserApiController
         var telemetrySnapshot = TelemetryService.BuildPayload("logs", libraryCount);
         var instanceId = Plugin.Instance?.Configuration?.Telemetry?.InstanceId;
         if (string.IsNullOrEmpty(instanceId))
-            instanceId = Guid.NewGuid().ToString();
+            instanceId = OneOffBundleId;
 
         var json = TelemetryService.BuildLogBundleJson(
             instanceId,
@@ -873,17 +934,29 @@ public class LetterboxdController : JellyfinUserApiController
 
     /// <summary>
     /// Returns the EXACT bundle that "Send logs to developer" would upload, without
-    /// sending it. Backs the consent modal's "Preview exactly what's sent" so the user
-    /// sees the real log lines and telemetry snapshot, not just the anonymous part.
+    /// sending it, including the note the admin has typed so far. Backs the Logs tab's
+    /// Preview so the user sees the real log lines and telemetry snapshot, not just the
+    /// anonymous part. A POST so the note travels in the body, never in a URL that request
+    /// and proxy logs keep.
     /// </summary>
-    [HttpGet("Telemetry/PreviewLogs")]
+    [HttpPost("Telemetry/PreviewLogs")]
     [Authorize(Policy = "RequiresElevation")]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    public ActionResult PreviewLogs()
+    public ActionResult PreviewLogs([FromBody] SendLogsRequest? request = null)
     {
-        return Content(BuildLogBundleJson(null).Json, "application/json");
+        return Content(BuildLogBundleJson(request?.Note).Json, "application/json");
     }
 
+    /// <summary>
+    /// User-initiated "send logs to developer". Uploads the bundle from
+    /// <see cref="BuildLogBundleJson"/> (recent log lines with emails masked, the current
+    /// telemetry snapshot, versions and the admin's note) to the private telemetry backend
+    /// and returns a short reference code the user can quote in a bug report. Admin-only.
+    /// Unlike telemetry this is NOT anonymous (log lines name films, shows, Jellyfin users
+    /// and Letterboxd usernames) and only runs on this explicit, disclosed action. Works
+    /// whether or not telemetry is enabled; if no telemetry instance id exists, the bundle
+    /// carries an id made once per server run, so a preview and the send that follows match.
+    /// </summary>
     [HttpPost("Telemetry/SendLogs")]
     [Authorize(Policy = "RequiresElevation")]
     [ProducesResponseType(StatusCodes.Status200OK)]
@@ -958,42 +1031,39 @@ public class LetterboxdController : JellyfinUserApiController
     /// rating writeback and the ItemRating read path so the two cannot drift.
     /// </summary>
     private BaseItem? FindMovieByTmdbId(User user, int tmdbId)
-    {
-        return _libraryManager.GetItemList(new InternalItemsQuery(user)
-        {
-            IncludeItemTypes = new[] { BaseItemKind.Movie },
-            IsVirtualItem = false,
-            Recursive = true
-        }).FirstOrDefault(m => m.GetProviderId(MediaBrowser.Model.Entities.MetadataProvider.Tmdb) == tmdbId.ToString());
-    }
+        => FindByTmdbId(user, BaseItemKind.Movie, tmdbId).FirstOrDefault();
 
     private BaseItem? FindSeriesByTmdbId(User user, int tmdbId)
-    {
-        return _libraryManager.GetItemList(new InternalItemsQuery(user)
-        {
-            IncludeItemTypes = new[] { BaseItemKind.Series },
-            IsVirtualItem = false,
-            Recursive = true
-        }).FirstOrDefault(s => s.GetProviderId(MediaBrowser.Model.Entities.MetadataProvider.Tmdb) == tmdbId.ToString());
-    }
+        => FindByTmdbId(user, BaseItemKind.Series, tmdbId).FirstOrDefault();
 
     /// <summary>
     /// Resolve an episode by series TMDb id + season/episode number. The series
-    /// TMDb id lives on the parent Series entity; SeriesTmdbIdReader is the one
-    /// place that knows that, shared with Serializd sync.
+    /// TMDb id lives on the parent Series entity, so the series is resolved first
+    /// and its episodes are then queried by number.
     /// </summary>
     private BaseItem? FindEpisodeByTmdbId(User user, int seriesTmdbId, int seasonNumber, int episodeNumber)
     {
+        var seriesIds = FindByTmdbId(user, BaseItemKind.Series, seriesTmdbId).Select(s => s.Id).ToArray();
+        if (seriesIds.Length == 0)
+            return null;
+
         return _libraryManager.GetItemList(new InternalItemsQuery(user)
         {
             IncludeItemTypes = new[] { BaseItemKind.Episode },
             IsVirtualItem = false,
-            Recursive = true
+            Recursive = true,
+            AncestorIds = seriesIds,
+            ParentIndexNumber = seasonNumber,
+            IndexNumber = episodeNumber
         }).OfType<MediaBrowser.Controller.Entities.TV.Episode>()
-          .FirstOrDefault(ep => Serializd.SerializdSyncRunner.SeriesTmdbIdReader(ep) == seriesTmdbId
-              && ep.ParentIndexNumber == seasonNumber
-              && ep.IndexNumber == episodeNumber);
+          // Re-checked in memory like FindByTmdbId: the episode must belong to the matched series.
+          .FirstOrDefault(ep => seriesIds.Contains(ep.SeriesId)
+              && ep.ParentIndexNumber == seasonNumber && ep.IndexNumber == episodeNumber);
     }
+
+    /// <inheritdoc cref="TmdbLibraryLookup.FindByTmdbId"/>
+    private IEnumerable<BaseItem> FindByTmdbId(User user, BaseItemKind kind, int tmdbId)
+        => TmdbLibraryLookup.FindByTmdbId(_libraryManager, user, kind, tmdbId);
 
     /// <summary>
     /// Mirror the dashboard review's star rating into Jellyfin's UserItemData.Rating
@@ -1058,6 +1128,9 @@ public class ReviewRequest
     public string? Date { get; set; }
     public double? Rating { get; set; }
     public int? TmdbId { get; set; }
+
+    /// <summary>Optional film title, used to label a rating-only review in the activity list.</summary>
+    public string? Title { get; set; }
 
     /// <summary>
     /// Optional. When set, the review is posted only to that Letterboxd account.

@@ -8,7 +8,7 @@ body:
       value: |
         Thanks for taking the time to file a report. The more of the fields below you fill in, the faster this can be diagnosed. Most sync issues come down to your version, which sync path you're on, and what the logs say.
 
-        Before submitting, please skim the [Cloudflare troubleshooting](https://github.com/builtbyproxy/jellyfin-plugin-letterboxd#cloudflare-issues) section. A large share of "films won't sync" reports turn out to be an expired or mismatched `cf_clearance` cookie.
+        Before submitting, please skim the [Cloudflare troubleshooting](https://github.com/builtbyproxy/Jellyscribe#cloudflare-issues) section. A large share of "films won't sync" reports turn out to be an expired or mismatched `cf_clearance` cookie.
 
   - type: checkboxes
     id: preflight
@@ -73,11 +73,11 @@ body:
     attributes:
       label: Telemetry instance ID (optional)
       description: >
-        Only if telemetry is enabled and you're comfortable sharing it. Find it in Settings, then
-        Anonymous Telemetry, then Preview exact JSON (the `instance_id` field). This lets us correlate your
-        report with your anonymous pings. Heads up, pasting it into a public issue links that ID to your past
-        pings. Once you've shared it, you can regenerate your ID for future privacy using the
-        "Copy + regenerate ID" option in the preview modal.
+        Only if telemetry is enabled and you're comfortable sharing it. Find it on the Jellyscribe admin page under
+        Integrations, then Anonymous telemetry (it is shown there, and as `instance_id` in Preview). This lets us
+        correlate your report with your anonymous pings. Heads up, pasting it into a public issue links that ID to
+        your past pings. Once you've shared it, you can regenerate your ID for future privacy with Regenerate ID,
+        or the "Copy + regenerate ID" option in the Preview window.
       placeholder: "e.g. 8a6f4f6e-1f2b-4c43-9a57-2f0e6f3b9d1c"
     validations:
       required: false

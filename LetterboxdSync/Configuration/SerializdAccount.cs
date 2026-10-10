@@ -18,8 +18,30 @@ public class SerializdAccount
     /// <summary>Serializd login email. Not a secret (it's the account identifier), stored in the clear like the Letterboxd username.</summary>
     public string Email { get; set; } = string.Empty;
 
+    /// <summary>Plaintext password, in memory only. See <see cref="Account.LetterboxdPassword"/>.</summary>
     [XmlIgnore]
+    [JsonIgnore]
     public string Password { get; set; } = string.Empty;
+
+    /// <summary>Write-only JSON form of <see cref="Password"/>. See <see cref="Account.LetterboxdPasswordInput"/>.</summary>
+    [XmlIgnore]
+    [JsonPropertyName("Password")]
+    public string? PasswordInput
+    {
+        internal get => Password;
+        set => Password = value ?? string.Empty;
+    }
+
+    [XmlIgnore]
+    public bool HasPassword => !string.IsNullOrEmpty(Password);
+
+    /// <summary>Write-only: the owner before an admin moved the account. See <see cref="Account.OriginalUserJellyfinId"/>.</summary>
+    [XmlIgnore]
+    public string? OriginalUserJellyfinId { internal get; set; }
+
+    /// <summary>Write-only: the email before a rename. See <see cref="Account.OriginalLetterboxdUsername"/>.</summary>
+    [XmlIgnore]
+    public string? OriginalEmail { internal get; set; }
 
     /// <summary>
     /// Encrypted on-disk form of <see cref="Password"/>. XmlElement keeps the on-disk
@@ -33,9 +55,6 @@ public class SerializdAccount
         get => SecretProtector.Protect(Password) ?? string.Empty;
         set => Password = SecretProtector.Unprotect(value) ?? string.Empty;
     }
-
-    /// <summary>Serializd username returned at login, for display in the UI. Not used for auth.</summary>
-    public string? SerializdUsername { get; set; }
 
     public bool Enabled { get; set; }
 
@@ -81,8 +100,11 @@ public class SerializdAccount
     public bool MirrorJellyseerrWatchlist { get; set; }
 
     /// <summary>
-    /// Optional override for the watchlist collection + playlist name. When null/blank,
-    /// defaults to "Serializd Watchlist". Mirrors <see cref="Account.PlaylistName"/>.
+    /// Optional override for the watchlist collection + playlist name, settable by admins only
+    /// (the per-user endpoint keeps the stored value). When null/blank the playlist is
+    /// "Serializd Watchlist" and the collection "Serializd Watchlist (Jellyfin username)". The
+    /// name is applied when the plugin creates the collection and whenever the resolved name
+    /// changes (this setting, or the username in the default); the collection is tracked by id. Mirrors <see cref="Account.PlaylistName"/>.
     /// </summary>
     public string? WatchlistName { get; set; }
 

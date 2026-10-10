@@ -10,6 +10,292 @@ export type ReleaseNotes = {
 
 export const releaseNotes: ReleaseNotes[] = [
   {
+    version: '2.12.3',
+    headline: 'Editing an account keeps every setting it already has',
+    summary:
+      'When an admin edits a linked diary on the Jellyscribe settings page, the save now starts from the account as it is stored and changes only what the form shows. Before, the page rebuilt the account from scratch, so any account setting the form did not list would have been reset to its default on the next edit. Nothing is lost today, because every current setting is on the form, but future settings are now safe from the moment they ship.',
+    highlights: {
+      fixes: [
+        'Editing an account on the admin settings page keeps every stored setting the form does not show, instead of resetting it.',
+      ],
+    },
+  },
+  {
+    version: '2.12.2',
+    headline: 'Smaller settings pages that update themselves after an upgrade',
+    summary:
+      'Both Jellyscribe dashboards, the admin settings page and your own page, now share one script and one stylesheet instead of each carrying its own copy. The pages are about five times smaller, and the shared part, fonts included, is downloaded once per version and then cached. They look and behave exactly as before. After a plugin upgrade, an open browser tab picks up the new version the next time the page is opened, with no reload needed. When you post a review that lands on a diary entry you had already logged, the result now says so, and any note from the server is shown under that account. The design follows Wouter Stulp\'s shared-assets work in his fork, reworked to keep the bundled fonts and to load the right version after an upgrade.',
+    highlights: {
+      improvements: [
+        'Both dashboards share one cached script and stylesheet, so each page is about five times smaller and looks exactly the same, with the bundled fonts kept (design by Wouter Stulp)',
+        'An open tab loads the new dashboard code after a plugin upgrade without a reload',
+        'The review result says when a review was added to the diary entry you already had, and shows any note from the server',
+      ],
+    },
+  },
+  {
+    version: '2.12.1',
+    headline: 'A review of a film already in your diary goes onto that entry',
+    summary:
+      'Reviewing a film from your activity list no longer adds a second watch to your Letterboxd diary. When the film is already in your diary from a sync, the review and its star rating now go onto that diary entry, keeping its original date. A review is never written over one you already wrote on Letterboxd: you are asked to edit that one on Letterboxd instead. If the entry can\'t be found, or your account is signed in through the Letterboxd website rather than the official API, the review is saved as a new entry on the day you watched the film rather than today, and the result tells you so.',
+    highlights: {
+      fixes: [
+        'Reviewing a film already in your diary puts the review and rating on that diary entry instead of logging a second watch dated today.',
+        'A review that can\'t be added to the existing entry is saved on the day you watched the film, not today, and the result says why.',
+        'A review you already wrote on Letterboxd is never overwritten.',
+      ],
+    },
+  },
+  {
+    version: '2.12.0',
+    headline: 'Search and your whole history in the activity list',
+    summary:
+      'The activity list now reaches your whole history. A search box above the status filters finds any title. A "Load older history" button pages back through everything Jellyscribe has logged, instead of the list quietly stopping after a couple of hundred entries. A binge of one show folds into a single row that shows the episode range and any failures, and opens with a click or the keyboard. Prev and Next switch off at the ends. The same works on the admin dashboard\'s overview and its Activity tab. In the account dialog, the watchlist option\'s description now changes when you switch a new account between Serializd and Letterboxd, and the service names read "Serializd: TV" and "Letterboxd: Film". Thanks to Wouter Stulp, whose search, episode grouping and older-history work is included.',
+    highlights: {
+      new: [
+        'Search your activity by title on both dashboards',
+        'Load older history pages back through everything Jellyscribe has logged, with a count of what is loaded',
+        'A binge of one show folds into a single row you can open, showing the episode range and any failures (thanks to Wouter Stulp)',
+      ],
+      improvements: [
+        'Prev and Next switch off at the ends of the activity list and the admin Activity tab',
+        'An empty search says when older history is still left to load',
+      ],
+      fixes: [
+        'The activity list no longer stops silently after a couple of hundred entries',
+        'An entry that shifted between two pages no longer shows twice',
+        'Switching a new account to Letterboxd now rewords the watchlist option, which kept its TV wording',
+      ],
+    },
+  },
+  {
+    version: '2.11.1',
+    headline: 'Episode reviews on single-season shows, and gentler rate-limit handling',
+    summary:
+      'Jellyscribe is steadier when Letterboxd or Serializd ask it to slow down. A rate-limit pause is honoured for up to a minute. Anything longer skips the film or episode until the next sync, and a Letterboxd sync that keeps hitting the limit stops early instead of trying every film. Letterboxd retries are now accepted instead of refused as a repeat. Stopping a sync, or restarting Jellyfin, no longer waits out a long pause. When you sign in with your Letterboxd website login, a TV series that Letterboxd lists as a film can no longer be mistaken for a movie with the same TMDb number, so the wrong film is never marked watched or rated. A Serializd review of an episode now lands on the same episode a log would: for a show Serializd lists as a single season, it goes to the right episode of that season, and it is refused if Serializd has no such episode. The activity lists on both dashboards show the full page they ask for again.',
+    highlights: {
+      improvements: [
+        'A rate-limit pause from Letterboxd or Serializd is honoured for up to a minute. A longer one skips the item until the next sync, and a Letterboxd sync that keeps hitting the limit stops early.',
+        'Stopping a sync or restarting Jellyfin no longer waits out a rate-limit pause or a retry backoff.',
+      ],
+      fixes: [
+        'Letterboxd retries after a rate limit are now accepted instead of refused as a repeat.',
+        'With the Letterboxd website login, a TV series that Letterboxd lists as a film is no longer mistaken for a movie with the same TMDb number.',
+        'A Serializd episode review on a show Serializd lists as a single season now lands on the right episode, and is refused if Serializd has no such episode.',
+        'The activity lists on both dashboards show the full page they ask for again.',
+      ],
+    },
+  },
+  {
+    version: '2.11.0',
+    headline: 'See exactly what telemetry and log bundles send',
+    summary:
+      'You can now see exactly what Jellyscribe would send before anything leaves your server. In the admin settings, Integrations has a Preview of the anonymous telemetry ping, the exact JSON, with Copy and "Copy + regenerate ID" for bug reports, and a Regenerate ID button that gives your server a fresh anonymous identity whenever you like. The admin Overview asks once whether you would like to turn telemetry on, and never again after you answer. "Send to developer" on the Logs tab now has a Preview of the full bundle, your note included, and its confirmation lists everything the bundle holds. Email addresses no longer appear in Jellyscribe\'s logs or in a bundle: Serializd accounts are named by a short tag, and any address in older log lines is masked. A successful review\'s reply is no longer written to the log, and replies that older versions logged are cut from what you can send. The telemetry description is also more precise: usage counts are rough buckets, error counts are exact per week, and an extra ping goes out at most once a day when a new kind of error starts.',
+    highlights: {
+      new: [
+        'Preview the exact anonymous telemetry ping from Integrations, with Copy and Copy + regenerate ID for bug reports.',
+        'Regenerate ID gives your server a fresh anonymous telemetry identity whenever you like.',
+        'Send to developer has a Preview of the full log bundle, your note included, before anything is uploaded.',
+        'A one-time question on the admin Overview about turning on anonymous telemetry, which never returns once answered.',
+      ],
+      improvements: [
+        'The Send to developer confirmation lists everything a bundle holds, including that log lines name films, shows and usernames.',
+        'The telemetry description says exactly what is sent: bucketed usage counts, exact weekly error counts, and an extra ping at most once a day when a new kind of error starts.',
+      ],
+      fixes: [
+        'Email addresses no longer appear in Jellyscribe\'s logs or in a log bundle; Serializd accounts are named by a short tag.',
+        'A successful review\'s reply, which can repeat the review, is no longer written to the log, and replies older versions logged are cut from what you can send.',
+        'A log bundle preview now matches what is sent byte for byte, even when telemetry has never been on.',
+      ],
+    },
+  },
+  {
+    version: '2.10.10',
+    headline: 'Settings pages that work by keyboard, on phones and in both themes',
+    summary:
+      'The Jellyscribe pages now work properly on a phone, by keyboard and with a screen reader, and they follow your Jellyfin theme. The admin settings page no longer runs off the side of a phone screen, and on a phone each activity row shows its date under the title, an idea from Wouter Stulp. The section menu, the star rating and the account and review windows can all be used with the keyboard. The windows now behave as proper dialogs: they keep focus inside, close with Escape and return you to where you were. Every field is labelled for screen readers. Thanks to Wouter Stulp, buttons and small text are much easier to read, disabled buttons look disabled, and the pages no longer restyle the rest of Jellyfin. The pages now switch between light and dark with your Jellyfin theme instead of your device\'s setting, and in light mode every status colour is readable. "Back to Jellyfin" now works on servers that live under a sub-path such as /jellyfin, and returns you to the page you came from without reloading.',
+    highlights: {
+      improvements: [
+        'The pages follow your Jellyfin theme, light or dark, instead of your device\'s setting.',
+        'The section menu, the star rating and the account and review windows all work by keyboard, and every field is labelled for screen readers.',
+        'Clearer buttons and small text, with disabled buttons that look disabled, thanks to Wouter Stulp.',
+        'Every status colour is readable in light mode.',
+        'On a phone, each activity row shows its date under the title, an idea from Wouter Stulp.',
+      ],
+      fixes: [
+        'The admin settings page no longer runs off the side of a phone screen.',
+        'The Jellyscribe pages no longer restyle the rest of Jellyfin\'s interface, a fix from Wouter Stulp.',
+        '"Back to Jellyfin" works on servers under a sub-path such as /jellyfin and returns you to the page you came from without a reload.',
+        'Leaving the admin page while a sync runs no longer keeps checking its progress in the background.',
+      ],
+    },
+  },
+  {
+    version: '2.10.9',
+    headline: 'The settings pages never lose or duplicate an account',
+    summary:
+      'The Jellyscribe dashboards now keep your accounts safe when something goes wrong. If your accounts or activity can\'t be loaded, the page says so and offers Retry instead of showing an empty list or zeros, so a save can no longer wipe your linked diaries. A failed or repeated Save never adds an account twice, and Remove now asks you to confirm in the page and only removes the account once the server has. Every save, sync, login check and review now tells you when it fails and why, rather than hanging on "Saving…" or claiming everything was up to date, and a sync whose progress can\'t be read stops with a clear message. A review with only a star rating now sets your Letterboxd rating instead of always failing. A review that lands on some of your accounts says which ones it missed. Review is no longer offered on rows that can\'t be reviewed. The rewatch date defaults to your own local date, and selecting text in a modal no longer closes it. On the admin dashboard, saving settings no longer undoes account changes your users made in the meantime, Sync all now also runs the TV sync for every user, and the overview is labelled as your own activity. Opening Jellyscribe from the sidebar while the admin settings page is still loaded now works. Thanks to Wouter Stulp, whose fixes for showing load and save failures and for reporting the Integrations save result are included.',
+    highlights: {
+      improvements: [
+        'Remove asks you to confirm in the page, and only removes the account once the server has (both dashboards).',
+        'A review with only a star rating sets your Letterboxd rating, and a review that reaches some of your accounts names the ones it missed.',
+        'On the admin dashboard, Sync all now also runs the TV sync for every user, and the overview is labelled as your own activity.',
+      ],
+      fixes: [
+        'A failed account or activity load shows an error with Retry instead of an empty list or zeros, so a save can no longer overwrite your accounts (thanks to Wouter Stulp).',
+        'A failed or repeated Save never adds an account twice, and every save shows the server\'s reason when it fails (thanks to Wouter Stulp).',
+        'The Integrations Save reports Saved or the reason it failed (thanks to Wouter Stulp).',
+        'Admin saves no longer undo account changes users made while the dashboard was open.',
+        'Sync now reports why a sync could not start, and stops with a clear message when its progress can\'t be read.',
+        'Login checks and reviews no longer hang on Verifying or Posting when the server can\'t be reached, and Post review can\'t be pressed twice.',
+        'Review is no longer offered on rows that can\'t be reviewed.',
+        'The rewatch date defaults to your local date.',
+        'Selecting text in a dialog no longer closes it.',
+        'Opening Jellyscribe from the sidebar works while the admin settings page is still loaded.',
+      ],
+    },
+  },
+  {
+    version: '2.10.8',
+    headline: 'Faster, steadier syncs on big libraries',
+    summary:
+      'Syncs get faster and calmer on big libraries, building on work by Wouter Stulp, whose changes to scheduling, caching, connection reuse and history upkeep are included here. The scheduled tasks now run at fixed, staggered times overnight (Letterboxd from 3:00, Serializd from 4:00, telemetry at 5:00) instead of a day after each restart, so if you kept the default schedule your syncs move to these times, and a server that is off overnight still syncs at least every two days. Sync history no longer grows forever: old skipped and failed entries are trimmed without forgetting anything the sync relies on, and history files are rewritten safely so a crash can no longer truncate them. Films and shows are looked up once instead of on every run, and the review window and watchlists no longer scan the whole library. On accounts that use the Letterboxd website, real-time and rating sync reuse the signed-in session instead of logging in again for every film. When Cloudflare blocks the website, a run pauses that account after a few films instead of spending a minute on each one; a struggling Serializd is given room, a catch-up stops after a few failures in a row, and Serializd writes are never retried in a way that could log an episode twice. An account paused by repeated login failures now tries one login a day for a week, so a Letterboxd outage clears on its own, while a rejected password still waits for you to re-save it. Films without a TMDb id are noted once instead of on every run, the diary imports wait for a running sync instead of competing with it, and Jellyfin no longer waits on large history files at startup.',
+    highlights: {
+      improvements: [
+        'Scheduled tasks run at fixed, staggered times overnight; if you kept the default schedule, your syncs move to these times, with a two-day fallback for servers that are off at night (thanks to Wouter Stulp)',
+        'Sync history stays small: old skipped and failed entries are trimmed without forgetting anything the sync relies on (thanks to Wouter Stulp)',
+        'Films, seasons and library items are looked up once instead of on every run (thanks to Wouter Stulp)',
+        'Connections to Letterboxd, Serializd and Seerr are reused across syncs (thanks to Wouter Stulp)',
+        'Real-time and rating sync on the Letterboxd website reuse the signed-in session instead of logging in each time',
+        'Jellyfin starts faster with a large sync history',
+        'Films without a TMDb id are noted once instead of on every run',
+      ],
+      fixes: [
+        'History and cache files are rewritten safely, so a crash can no longer truncate them (thanks to Wouter Stulp)',
+        'A Cloudflare block pauses that account\'s run after a few films instead of costing a minute per film',
+        'A Serializd catch-up stops after repeated failures and never retries a write that might already have been saved',
+        'An account paused by login failures tries one login a day for a week, so an outage clears on its own',
+        'The Letterboxd and Serializd diary imports wait for a running sync instead of competing with it',
+      ],
+    },
+  },
+  {
+    version: '2.10.7',
+    headline: 'Every account synced on the right day, once',
+    summary:
+      'Jellyscribe now keeps track of each linked Letterboxd account separately. If two people share one Jellyfin login, the second account gets its own diary entries instead of being skipped because the first account already logged the film. Watches are now logged on the day you watched them in your server\'s time zone, whether real-time sync or the scheduled sync catches them. An evening film no longer lands on the next day, and the two no longer disagree. Films already on your diary for that day are remembered, so later syncs stop checking them again. When Letterboxd has a bad few days, those films are no longer given up on: Jellyscribe only stops trying a film when Letterboxd keeps saying it does not have it, or when it has failed on its own for over a week. If Letterboxd cannot answer the duplicate check, the film is retried later instead of risking a second diary entry. Two quick finishes of the same film now log once. A watchlist that cannot be read in full, on Letterboxd or Serializd, no longer removes anything from your playlist, collection or Seerr watchlist. The scheduled sync now marks rewatches. Ratings the plugin imports no longer get pushed back out to your other accounts. Half-point ratings now round the same way on Letterboxd and Serializd (a 4.5 in Jellyfin is 2.5 stars). Diary dates are sent correctly on servers set to a non-Gregorian calendar. Stopping the server mid-sync no longer marks a film as failed.',
+    highlights: {
+      improvements: [
+        'Half-point ratings round the same way on Letterboxd and Serializd',
+      ],
+      fixes: [
+        'A second Letterboxd account on the same Jellyfin user now gets its own diary entries',
+        'Watches are logged on the day you watched them in your server\'s time zone, by both real-time and scheduled sync',
+        'Films already on your diary are remembered and no longer re-checked on every sync',
+        'A few bad days on Letterboxd no longer make Jellyscribe give up on films',
+        'A failed duplicate check is retried later instead of risking a duplicate diary entry',
+        'Finishing the same film twice in quick succession logs it once',
+        'A watchlist that cannot be read in full no longer removes anything from your playlist, collection or Seerr watchlist',
+        'The scheduled sync now marks rewatches',
+        'Ratings imported by the plugin are no longer pushed to your other Letterboxd accounts',
+        'Diary dates are sent correctly on servers using a non-Gregorian calendar',
+        'Stopping the server during a sync no longer records a failure',
+      ],
+    },
+  },
+  {
+    version: '2.10.6',
+    headline: 'Saved passwords and keys stay on the server',
+    summary:
+      'Jellyscribe no longer sends saved passwords, cookies or the Seerr API key back to the browser. Before, the settings pages loaded each linked account\'s Letterboxd or Serializd password and cookies into the form, and the admin settings returned every user\'s password and the Seerr key. Anyone holding a session could read them. Saved values now show as "Saved" with an empty field. Leave it blank to keep the saved value, type to replace it, or tick "Remove saved cookies" or "Remove saved key" to drop it. Verify login works with the saved password, and an admin can move an account to another Jellyfin user or rename it without re-entering its password. Existing saved logins keep working after the upgrade. Thanks to Wouter Stulp, whose fork made stored secrets write-only first; this release builds on his work.',
+    highlights: {
+      improvements: [
+        'Saved passwords, cookies and the Seerr API key show as "Saved" with an empty field: leave it blank to keep it, type to replace it, or tick the remove box to drop it.',
+        'Verify login checks the saved password when the field is left blank.',
+        'Renaming an account, or an admin moving it to another Jellyfin user, keeps its saved password and cookies.',
+      ],
+      fixes: [
+        'Settings pages and the admin configuration no longer send saved Letterboxd and Serializd passwords, cookies or the Seerr API key back to the browser (thanks to Wouter Stulp).',
+      ],
+    },
+  },
+  {
+    version: '2.10.5',
+    headline: 'Separate Serializd watchlist collections, and Seerr requests made as each person',
+    summary:
+      'Serializd watchlist collections are now kept separately for each person. Before, everyone who turned on Serializd watchlist sync shared one collection called "Serializd Watchlist", so each person\'s sync removed the other\'s shows. A custom name could also point the sync at any collection on the server, including one an admin curates. Each linked account now gets its own collection, named "Serializd Watchlist (your Jellyfin username)" by default, and Jellyscribe only ever changes the collection it made for that account. On upgrade, if only one account was syncing into the old shared collection, it carries on using it. Otherwise the old collection is left exactly as it is and each account gets a fresh one, so you can delete the old one once you no longer need it. Collections are visible to everyone who can see the shows in them. Custom names for watchlist collections and playlists can now be set only by an admin, from the plugin\'s settings page. Seerr requests are now made as each person\'s own Seerr account, so Seerr applies their own permissions. Admins, note one change: if you have turned off "Auto-approve requests created by Jellyscribe", requests from people without Auto-Approve in Seerr now wait in Seerr\'s approval queue, where before they were approved as the admin. With the switch on, which is the default, requests still go straight through. Thanks to Wouter Stulp, who spotted the Seerr approval problem in his fork.',
+    highlights: {
+      improvements: [
+        'Each linked Serializd account now gets its own watchlist collection, named after its Jellyfin user by default.',
+        'Only admins can now set custom names for watchlist collections and playlists, from the plugin\'s settings page.',
+      ],
+      fixes: [
+        'Two people with Serializd watchlist sync no longer share one collection and remove each other\'s shows.',
+        'A custom watchlist name can no longer make the sync rewrite a collection someone else curates.',
+        'Seerr requests are made as each person\'s own Seerr account, so Seerr applies their own approval rights and quota (spotted by Wouter Stulp).',
+        'Admins: with "Auto-approve requests created by Jellyscribe" turned off, requests from people without Auto-Approve in Seerr now wait for approval instead of being approved as the admin.',
+      ],
+    },
+  },
+  {
+    version: '2.10.4',
+    headline: 'Tighter security for servers with several Jellyfin users',
+    summary:
+      'Jellyscribe is now safer on servers shared by several people. Only administrators can run the Seerr connection test, and a failed test no longer reports details about what lives at the address entered. The sync progress shown on the dashboard no longer names whose sync is running. The activity and stats views refuse to answer when the server cannot tell who is asking, where before they returned everyone\'s history. Login checks for Letterboxd and Serializd are now rate-limited per user and across the server, so nobody can use the server to test passwords and get its address blocked; the dashboard says how long to wait. "Sync watchlist now" for Serializd can no longer start several overlapping runs. Two old account endpoints that nothing used any more were removed, one of which returned a stored password. The Seerr URL field now shows a generic example address. Thanks to Wouter Stulp, whose fork fixed the Seerr test, progress and history issues first.',
+    highlights: {
+      improvements: [
+        'Login checks for Letterboxd and Serializd are rate-limited per user and server-wide, and the dashboard says how long to wait.',
+        'The Seerr URL field shows a generic example address.',
+      ],
+      fixes: [
+        'Only administrators can run the Seerr connection test, and a failure no longer echoes details about the address tried (thanks to Wouter Stulp).',
+        'Sync progress no longer shows other people\'s Jellyfin or Letterboxd names (thanks to Wouter Stulp).',
+        'Activity and stats refuse to answer when the caller cannot be identified, instead of returning everyone\'s history (thanks to Wouter Stulp).',
+        'Serializd "Sync watchlist now" runs one at a time and says when a run is already going.',
+        'Removed two unused account endpoints, one of which returned the stored password.',
+      ],
+    },
+  },
+  {
+    version: '2.10.3',
+    headline: 'Security fixes for servers with more than one Jellyfin user',
+    summary:
+      'This release fixes two security problems that affect any server where more than one person uses Jellyscribe, so please update. First, the admin dashboard showed account names, film titles and error messages as raw page content, so a user could save a specially crafted account name that ran code in an admin\'s browser the next time they opened the dashboard. Every value is now shown as plain text, and an old, unused stats page with the same problem has been removed. Second, Jellyscribe remembered Letterboxd and Serializd logins by account name alone, so a user who entered someone else\'s Letterboxd username or Serializd email with any password could end up syncing, reviewing and rating as that person. A remembered login is now only reused when the password matches too. Households that deliberately share one Letterboxd or Serializd account across several Jellyfin users are unaffected. Both problems were found and fixed by Wouter Stulp. Thank you, Wouter.',
+    highlights: {
+      fixes: [
+        'The admin and user dashboards show every account name, title and error as plain text, so saved values can no longer run code in an admin\'s browser.',
+        'A remembered Letterboxd or Serializd login is only reused when the password matches, so one user can no longer act as another user\'s account.',
+        'Removed an old, unused stats page.',
+      ],
+    },
+  },
+  {
+    version: '2.10.2',
+    headline: 'Later anime seasons log to Serializd instead of being skipped',
+    summary:
+      'Many anime are split into several seasons in Jellyfin but listed on Serializd as one long season. The Apothecary Diaries is a good example: Jellyfin shows a season 1 and a season 2, while Serializd, which follows TMDb, has one long season covering both. Watching season 2 in Jellyfin produced nothing on Serializd, because Jellyscribe asked for a season 2 that Serializd does not have and skipped the episode. Jellyscribe now recognises that shape and logs the episode to season 1 at its running number, so season 2 episode 1 lands on Serializd as episode 25. It only does this for shows Serializd keeps as a single season, when it knows exactly how many episodes the earlier seasons have, and when the running number still falls inside Serializd\'s season. A show Serializd simply has not added a new season for yet, or a library missing episodes that would shift the numbering past Serializd\'s last episode, is still skipped rather than logged to the wrong episode.',
+    highlights: {
+      fixes: [
+        'Episodes from later seasons of shows Serializd lists as a single season (common for anime) are logged to Serializd instead of being skipped.',
+      ],
+    },
+  },
+  {
+    version: '2.10.1',
+    headline: 'Renaming a Jellyfin user no longer empties their Jellyscribe history',
+    summary:
+      'If you renamed a Jellyfin user, their Jellyscribe dashboard suddenly showed zero films, zero episodes and no recent activity, as if nothing had ever been synced. Nothing was lost: every entry was still there, but each one was filed under the name the user had when it was written, and the dashboard only looked for the new name. The same mix-up quietly weakened the duplicate checks, so a film synced before the rename could be logged to Letterboxd a second time afterwards. History is now tied to the Jellyfin user itself rather than to their name, and existing entries are linked up automatically the first time this version starts. The one case this cannot repair on its own is a user who was already renamed before updating: their older entries stay filed under the old name.',
+    highlights: {
+      fixes: [
+        'The dashboard, stats and recent activity keep showing a user\'s history after their Jellyfin username changes.',
+        'Duplicate protection keeps recognising films and episodes synced before a rename, so they are not logged twice.',
+      ],
+      improvements: [
+        'Existing history is linked to its Jellyfin user automatically on first start, so a rename made after updating is handled too.',
+      ],
+    },
+  },
+  {
     version: '2.10.0',
     headline: 'Jellyscribe now opens inside Jellyfin, on Jellyfin 12 too',
     summary:
@@ -383,7 +669,7 @@ export const releaseNotes: ReleaseNotes[] = [
     highlights: {
       new: [
         'Active installs are now counted from ordinary catalog update checks and release downloads served through an edge mirror of the official manifest. GitHub download totals were useless for this (re-downloads and auto-updates inflate them), and the opt-in telemetry only sees servers that enabled it.',
-        'Uniqueness is approximated with a weekly-rotating anonymous fingerprint: your IP address is used transiently at the edge to compute it and is never stored, and counts cannot be linked across weeks. Unlike the opt-in telemetry, this counting is always on; it carries no other information about you, your server, or your library.',
+        'Uniqueness is approximated with a weekly-rotating pseudonymous fingerprint: your IP address is used transiently at the edge to compute it and is never stored in the counts. (Corrected later: the fingerprint uses a fixed secret salt, so whoever holds that salt could link a known IP\'s rows across weeks.) Unlike the opt-in telemetry, this counting is always on; it carries no other information about you, your server, or your library.',
       ],
       improvements: [
         'Release downloads in the plugin catalog now redirect through the mirror to the identical GitHub release file. Checksums are unchanged, so Jellyfin\'s integrity check on install and update passes exactly as before.',

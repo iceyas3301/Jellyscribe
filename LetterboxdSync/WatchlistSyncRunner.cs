@@ -182,10 +182,10 @@ public class WatchlistSyncRunner
     private async Task SyncOneUserAsync(User user, Account account, SeerrClient? jellyseerr, string source, CancellationToken cancellationToken)
     {
         _logger.LogInformation("Starting watchlist sync for {Username} (source={Source})", user.Username, source);
-        SyncProgress.SetPhase(SyncProgress.TrackLetterboxd, $"Authenticating {user.Username}");
+        SyncProgress.SetPhase(SyncProgress.TrackLetterboxd, "Authenticating");
 
         var breakerUserId = user.Id.ToString("N");
-        if (AuthBreaker.IsOpen(breakerUserId, account.LetterboxdUsername))
+        if (AuthBreaker.BlocksLogin(breakerUserId, account.LetterboxdUsername))
         {
             _logger.LogInformation(
                 "Skipping watchlist sync for {Username}: auth breaker open; re-save credentials to resume",
@@ -214,23 +214,23 @@ public class WatchlistSyncRunner
 
         using var _s = service;
 
-        SyncProgress.SetPhase(SyncProgress.TrackLetterboxd, $"Fetching watchlist for {user.Username}");
+        SyncProgress.SetPhase(SyncProgress.TrackLetterboxd, "Fetching watchlist");
         List<int> tmdbIds;
         try
         {
-            tmdbIds = await service.GetWatchlistTmdbIdsAsync(account.LetterboxdUsername).ConfigureAwait(false);
+            tmdbIds = await service.GetWatchlistTmdbIdsAsync(account.LetterboxdUsername, cancellationToken).ConfigureAwait(false);
             _logger.LogInformation("Found {Count} films in {Username}'s Letterboxd watchlist",
                 tmdbIds.Count, account.LetterboxdUsername);
             WatchlistStats.SetFilm(user.Id.ToString("N"), account.LetterboxdUsername, tmdbIds.Count);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             _logger.LogError("Failed to fetch watchlist for {Username}: {Message}", user.Username, ex.Message);
             TelemetryService.RecordError(TelemetryService.Classify(ex.Message));
             return;
         }
 
-        SyncProgress.SetPhase(SyncProgress.TrackLetterboxd, $"Updating Jellyfin playlist for {user.Username}");
+        SyncProgress.SetPhase(SyncProgress.TrackLetterboxd, "Updating Jellyfin playlist");
         var allMovies = _libraryManager.GetItemList(new InternalItemsQuery(user)
         {
             IncludeItemTypes = new[] { BaseItemKind.Movie },
@@ -238,14 +238,20 @@ public class WatchlistSyncRunner
             Recursive = true
         });
 
+        // One pass over the library instead of a scan per watchlist film. TryAdd keeps the
+        // first movie per id, which is what the per-film FirstOrDefault used to pick.
+        var moviesByTmdbId = new Dictionary<string, BaseItem>(StringComparer.Ordinal);
+        foreach (var movie in allMovies)
+        {
+            if (movie.GetProviderId(MetadataProvider.Tmdb) is { } id)
+                moviesByTmdbId.TryAdd(id, movie);
+        }
+
         var watchlistItemIds = new HashSet<Guid>();
         var matchedTmdbIds = new HashSet<int>();
         foreach (var tmdbId in tmdbIds)
         {
-            var match = allMovies.FirstOrDefault(m =>
-                m.GetProviderId(MetadataProvider.Tmdb) == tmdbId.ToString());
-
-            if (match != null)
+            if (moviesByTmdbId.TryGetValue(tmdbId.ToString(), out var match))
             {
                 watchlistItemIds.Add(match.Id);
                 matchedTmdbIds.Add(tmdbId);
@@ -292,7 +298,7 @@ public class WatchlistSyncRunner
             var primary = Config.GetPrimaryAccountForUser(account.UserJellyfinId);
             if (ReferenceEquals(primary, account))
             {
-                SyncProgress.SetPhase(SyncProgress.TrackLetterboxd, $"Mirroring Seerr watchlist for {user.Username}");
+                SyncProgress.SetPhase(SyncProgress.TrackLetterboxd, "Mirroring Seerr watchlist");
                 await MirrorJellyseerrWatchlistAsync(jellyseerr!, jellyseerrUserId.Value, tmdbIds, user.Username!, cancellationToken)
                     .ConfigureAwait(false);
             }
@@ -313,7 +319,7 @@ public class WatchlistSyncRunner
                 ? tmdbIds
                 : tmdbIds.Where(id => !matchedTmdbIds.Contains(id)).ToList();
 
-            SyncProgress.SetPhase(SyncProgress.TrackLetterboxd, $"Requesting {(account.BackfillAvailableRequests ? "watchlist" : "missing")} films via Seerr for {user.Username}");
+            SyncProgress.SetPhase(SyncProgress.TrackLetterboxd, $"Requesting {(account.BackfillAvailableRequests ? "watchlist" : "missing")} films via Seerr");
             if (requestIds.Count == 0) return;
 
             var requested = 0;

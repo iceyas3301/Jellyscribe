@@ -45,11 +45,11 @@ public class TelemetryTask : IScheduledTask
     {
         try
         {
-            return _libraryManager.GetItemList(new InternalItemsQuery
+            return _libraryManager.GetCount(new InternalItemsQuery
             {
                 IncludeItemTypes = new[] { BaseItemKind.Movie },
                 Recursive = true
-            }).Count;
+            });
         }
         catch
         {
@@ -57,12 +57,5 @@ public class TelemetryTask : IScheduledTask
         }
     }
 
-    public IEnumerable<TaskTriggerInfo> GetDefaultTriggers() => new[]
-    {
-        new TaskTriggerInfo
-        {
-            Type = TaskTriggerInfoType.IntervalTrigger,
-            IntervalTicks = TimeSpan.FromDays(1).Ticks
-        }
-    };
+    public IEnumerable<TaskTriggerInfo> GetDefaultTriggers() => TaskSchedule.Daily(TaskSchedule.Telemetry);
 }

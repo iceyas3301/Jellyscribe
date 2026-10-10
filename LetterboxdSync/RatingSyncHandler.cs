@@ -26,7 +26,8 @@ namespace LetterboxdSync;
 /// handler keeps every user's current movie ratings in memory, seeded from the library at startup,
 /// and acts only on a save whose rating differs from that. Pushes are further gated per account by
 /// <see cref="RatingPushStore"/>. The plugin's own rating writes save with
-/// <see cref="UserDataSaveReason.Import"/> and are ignored, so nothing echoes back.
+/// <see cref="UserDataSaveReason.Import"/>: they update the baseline but are never pushed, so
+/// nothing echoes back.
 ///
 /// The event handler does no I/O. One sweep loop pushes entries that have been quiet for
 /// <see cref="DebounceWindow"/>, so a user tapping through star values produces one push with the
@@ -52,6 +53,14 @@ public sealed class RatingSyncHandler : IHostedService, IDisposable
     // UserDataSaveEventArgs does not carry. Seeded at startup, then kept current by Observe.
     private readonly ConcurrentDictionary<(Guid User, Guid Item), double> _known = new();
     private volatile bool _baselineReady;
+
+    // Users the seed skipped because none of their accounts syncs ratings. Their saves only
+    // update the baseline, until a later seed pass picks them up.
+    private readonly ConcurrentDictionary<Guid, byte> _unseededUsers = new();
+
+    // Set when the plugin configuration is saved, so the sweep loop seeds anyone who has just
+    // turned rating sync on.
+    private volatile bool _reseedRequested;
 
     private CancellationTokenSource? _cts;
     private Task? _loop;
@@ -92,14 +101,21 @@ public sealed class RatingSyncHandler : IHostedService, IDisposable
     public Task StartAsync(CancellationToken cancellationToken)
     {
         _userDataManager.UserDataSaved += OnUserDataSaved;
+        if (Plugin.Instance != null)
+            Plugin.Instance.ConfigurationChanged += OnConfigurationChanged;
         _cts = new CancellationTokenSource();
         _loop = Task.Run(() => RunAsync(_cts.Token), CancellationToken.None);
         return Task.CompletedTask;
     }
 
+    private void OnConfigurationChanged(object? sender, MediaBrowser.Model.Plugins.BasePluginConfiguration e)
+        => _reseedRequested = true;
+
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         _userDataManager.UserDataSaved -= OnUserDataSaved;
+        if (Plugin.Instance != null)
+            Plugin.Instance.ConfigurationChanged -= OnConfigurationChanged;
         if (_cts == null || _loop == null)
             return;
 
@@ -146,9 +162,34 @@ public sealed class RatingSyncHandler : IHostedService, IDisposable
     /// </summary>
     internal void SeedBaseline(CancellationToken ct)
     {
+        var seeded = SeedUsers(_userManager.GetUsers(), ct);
+        _logger.LogInformation("Rating sync ready: {Count} existing film ratings recorded as the starting point", seeded);
+    }
+
+    /// <summary>Seeds the users the first pass skipped who have turned rating sync on since.</summary>
+    internal void SeedNewlyEnabledUsers(CancellationToken ct)
+    {
+        var users = _userManager.GetUsers().Where(u => _unseededUsers.ContainsKey(u.Id)).ToList();
+        var before = _unseededUsers.Count;
+        var seeded = SeedUsers(users, ct);
+        if (_unseededUsers.Count < before)
+            _logger.LogInformation("Rating sync turned on for {Users} more user(s): {Count} existing film ratings recorded as their starting point",
+                before - _unseededUsers.Count, seeded);
+    }
+
+    private int SeedUsers(IEnumerable<Jellyfin.Database.Implementations.Entities.User> users, CancellationToken ct)
+    {
         var seeded = 0;
-        foreach (var user in _userManager.GetUsers())
+        foreach (var user in users)
         {
+            // Reading every movie's user data is the expensive part, and a user with rating sync
+            // off on every account never pushes anything, so skip them until they turn it on.
+            if (!Config.GetEnabledAccountsForUser(user.Id.ToString("N")).Any(a => a.SyncRatings))
+            {
+                _unseededUsers[user.Id] = 0;
+                continue;
+            }
+
             var movies = _libraryManager.GetItemList(new InternalItemsQuery(user)
             {
                 IncludeItemTypes = new[] { BaseItemKind.Movie },
@@ -163,9 +204,11 @@ public sealed class RatingSyncHandler : IHostedService, IDisposable
                 if (rating is > 0 && _known.TryAdd((user.Id, movie.Id), rating.Value))
                     seeded++;
             }
+
+            _unseededUsers.TryRemove(user.Id, out _);
         }
 
-        _logger.LogInformation("Rating sync ready: {Count} existing film ratings recorded as the starting point", seeded);
+        return seeded;
     }
 
     internal void MarkBaselineReady() => _baselineReady = true;
@@ -188,7 +231,8 @@ public sealed class RatingSyncHandler : IHostedService, IDisposable
     /// </summary>
     internal void Observe(UserDataSaveEventArgs e)
     {
-        if (e.SaveReason != UserDataSaveReason.UpdateUserData && e.SaveReason != UserDataSaveReason.UpdateUserRating)
+        if (e.SaveReason != UserDataSaveReason.UpdateUserData && e.SaveReason != UserDataSaveReason.UpdateUserRating
+            && e.SaveReason != UserDataSaveReason.Import)
             return;
 
         if (e.Item == null || !e.Item.IsMovie())
@@ -196,6 +240,36 @@ public sealed class RatingSyncHandler : IHostedService, IDisposable
 
         var key = (e.UserId, e.Item.Id);
         double? current = e.UserData?.Rating is > 0 ? e.UserData.Rating : null;
+
+        // The plugin's own writes (diary import, the review modal) are never pushed, but they do
+        // become the new baseline. Otherwise the next favorite toggle on the film would see the
+        // imported rating as a change and push it to every linked account, overwriting a rating
+        // another account set on Letterboxd itself. Any other writer that saves with Import (an
+        // importing plugin, say) is treated the same way. A rating still waiting to be pushed is
+        // dropped only when the import replaced it with a different value; an import that saves
+        // the same value leaves the user's own change queued.
+        if (e.SaveReason == UserDataSaveReason.Import)
+        {
+            if (current is double imported)
+                _known[key] = imported;
+            else
+                _known.TryRemove(key, out _);
+            if (_pending.TryGetValue(key, out var queued) && queued.Rating != current)
+                _pending.TryRemove(key, out _);
+            return;
+        }
+        // A user the seed skipped (rating sync was off) has no baseline: this save cannot tell a
+        // change from an old rating, so it becomes the baseline and nothing is pushed. Turning
+        // rating sync on triggers a seed within a second or so (see OnConfigurationChanged).
+        if (_unseededUsers.ContainsKey(e.UserId))
+        {
+            if (current is double absorbed)
+                _known[key] = absorbed;
+            else
+                _known.TryRemove(key, out _);
+            return;
+        }
+
         var known = _known.TryGetValue(key, out var stored);
         double? previous = known ? stored : null;
 
@@ -245,6 +319,13 @@ public sealed class RatingSyncHandler : IHostedService, IDisposable
             {
                 try
                 {
+                    if (_reseedRequested)
+                    {
+                        _reseedRequested = false;
+                        if (!_unseededUsers.IsEmpty)
+                            SeedNewlyEnabledUsers(ct);
+                    }
+
                     await DrainDueAsync(ct).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -346,7 +427,7 @@ public sealed class RatingSyncHandler : IHostedService, IDisposable
             if (LibraryExclusion.IsExcluded(_libraryManager, item, account.ExcludedLibraryIds, _logger))
                 continue;
 
-            if (AuthBreaker.IsOpen(userIdN, account.LetterboxdUsername))
+            if (AuthBreaker.BlocksLogin(userIdN, account.LetterboxdUsername))
             {
                 _logger.LogInformation(
                     "Not syncing the rating on {Title} for {LbUser}: auth breaker open; it syncs on the next rating change after credentials are re-saved",
@@ -390,8 +471,8 @@ public sealed class RatingSyncHandler : IHostedService, IDisposable
 
             try
             {
-                var film = await service.LookupFilmByTmdbIdAsync(tmdbId).ConfigureAwait(false);
-                await service.SetFilmRatingAsync(film.Slug, film.FilmId, stars.Value).ConfigureAwait(false);
+                var film = await service.LookupFilmByTmdbIdAsync(tmdbId, ct).ConfigureAwait(false);
+                await service.SetFilmRatingAsync(film.Slug, film.FilmId, stars.Value, ct).ConfigureAwait(false);
 
                 RatingPushStore.RecordPushed(userIdN, account.LetterboxdUsername, tmdbId, stars.Value);
                 SyncHistory.Record(new SyncEvent
@@ -400,6 +481,7 @@ public sealed class RatingSyncHandler : IHostedService, IDisposable
                     FilmSlug = film.Slug,
                     TmdbId = tmdbId,
                     Username = user.Username,
+                    Account = account.LetterboxdUsername,
                     Timestamp = UtcNow(),
                     Status = SyncStatus.Rated,
                     Source = SyncEventSources.Rating
@@ -407,7 +489,7 @@ public sealed class RatingSyncHandler : IHostedService, IDisposable
                 _logger.LogInformation("Rated {Title} {Stars} stars on Letterboxd for {Username} as {LbUser}",
                     item.Name, stars.Value, user.Username, account.LetterboxdUsername);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
                 // Logged, not recorded as a Failed sync event: Failed events feed the diary runner's
                 // per-film abandon counter, and a rating push failing must never stop a film's

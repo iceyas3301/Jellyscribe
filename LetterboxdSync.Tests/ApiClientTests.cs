@@ -127,7 +127,7 @@ public class ApiClientAuthTests
         });
 
         using var client = new LetterboxdApiClient(TestLogger, handler);
-        var ex = await Assert.ThrowsAsync<Exception>(() => client.AuthenticateAsync("bad", "creds"));
+        var ex = await Assert.ThrowsAsync<LetterboxdApiAuthException>(() => client.AuthenticateAsync("bad", "creds"));
         Assert.Contains("invalid_grant", ex.Message);
     }
 
@@ -179,9 +179,110 @@ public class ApiClientAuthTests
     }
 }
 
+public class ApiClientTokenCacheIsolationTests
+{
+    private static readonly ILogger TestLogger = NullLoggerFactory.Instance.CreateLogger("test");
+
+    /// <summary>
+    /// Accepts the password grant only for "right" and records every grant it sees. expiresIn below
+    /// the client's 5-minute margin leaves the cached token stale, so the next login tries a refresh.
+    /// </summary>
+    private static ApiMockHandler TokenHandler(List<string> grants, int expiresIn = 3600) => new(request =>
+    {
+        var path = request.RequestUri?.AbsolutePath ?? "";
+        if (path.EndsWith("/auth/token"))
+        {
+            var body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            grants.Add(body);
+            if (body.Contains("grant_type=password") && !body.Contains("password=right"))
+            {
+                return new HttpResponseMessage(HttpStatusCode.BadRequest)
+                {
+                    Content = new StringContent("{\"error\":\"invalid_grant\"}")
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(new
+                {
+                    access_token = "victim-token",
+                    expires_in = expiresIn,
+                    refresh_token = "victim-refresh"
+                }))
+            };
+        }
+
+        if (path.EndsWith("/me"))
+        {
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"member\":{\"id\":\"m1\",\"username\":\"victim\"}}")
+            };
+        }
+
+        return new HttpResponseMessage(HttpStatusCode.NotFound);
+    });
+
+    [Fact]
+    public async Task AuthenticateAsync_SameUsernameWrongPassword_DoesNotReuseCachedToken()
+    {
+        var grants = new List<string>();
+        var handler = TokenHandler(grants);
+        var username = "isolation_" + Guid.NewGuid().ToString("N");
+
+        using var owner = new LetterboxdApiClient(TestLogger, handler);
+        await owner.AuthenticateAsync(username, "right");
+
+        using var attacker = new LetterboxdApiClient(TestLogger, handler);
+        await Assert.ThrowsAsync<LetterboxdApiAuthException>(() => attacker.AuthenticateAsync(username, "wrong"));
+
+        Assert.Equal(2, grants.Count);
+        Assert.Contains("password=wrong", grants[1]);
+    }
+
+    [Fact]
+    public async Task AuthenticateAsync_SameUsernameRightPassword_ReusesCachedToken()
+    {
+        var grants = new List<string>();
+        var handler = TokenHandler(grants);
+        var username = "isolation_" + Guid.NewGuid().ToString("N");
+
+        using var first = new LetterboxdApiClient(TestLogger, handler);
+        await first.AuthenticateAsync(username, "right");
+
+        using var second = new LetterboxdApiClient(TestLogger, handler);
+        await second.AuthenticateAsync(username, "right");
+
+        Assert.Single(grants);
+    }
+
+    [Fact]
+    public async Task AuthenticateAsync_StaleTokenWrongPassword_DoesNotUseRefreshToken()
+    {
+        var grants = new List<string>();
+        var handler = TokenHandler(grants, expiresIn: 60);
+        var username = "isolation_" + Guid.NewGuid().ToString("N");
+
+        using var owner = new LetterboxdApiClient(TestLogger, handler);
+        await owner.AuthenticateAsync(username, "right");
+
+        using var attacker = new LetterboxdApiClient(TestLogger, handler);
+        await Assert.ThrowsAsync<LetterboxdApiAuthException>(() => attacker.AuthenticateAsync(username, "wrong"));
+        Assert.DoesNotContain(grants, g => g.Contains("grant_type=refresh_token"));
+
+        // The owner's own stale token still goes through the refresh path.
+        using var ownerAgain = new LetterboxdApiClient(TestLogger, handler);
+        await ownerAgain.AuthenticateAsync(username, "right");
+        Assert.Contains("grant_type=refresh_token", grants[^1]);
+    }
+}
+
 public class ApiClientFilmLookupTests
 {
     private static readonly ILogger TestLogger = NullLoggerFactory.Instance.CreateLogger("test");
+
+    public ApiClientFilmLookupTests() => LetterboxdApiClient.ResetFilmCacheForTesting(550, 99999999);
 
     [Fact]
     public async Task LookupFilmByTmdbIdAsync_ReturnsFilmResult()
@@ -243,7 +344,7 @@ public class ApiClientFilmLookupTests
 
         using var client = new LetterboxdApiClient(TestLogger, handler);
         await client.AuthenticateAsync("user", "pass");
-        var ex = await Assert.ThrowsAsync<Exception>(() => client.LookupFilmByTmdbIdAsync(99999999));
+        var ex = await Assert.ThrowsAsync<FilmNotFoundException>(() => client.LookupFilmByTmdbIdAsync(99999999));
         Assert.Contains("not found", ex.Message);
     }
 }
@@ -251,6 +352,40 @@ public class ApiClientFilmLookupTests
 public class ApiClientDiaryTests
 {
     private static readonly ILogger TestLogger = NullLoggerFactory.Instance.CreateLogger("test");
+
+    [Theory]
+    [InlineData("th-TH")]  // Buddhist calendar: 2026 is 2569
+    [InlineData("fa-IR")]  // Persian calendar
+    public async Task MarkAsWatchedAsync_NonGregorianServerCulture_SendsGregorianDate(string culture)
+    {
+        string? capturedBody = null;
+        var handler = ApiTestHelpers.CreateAuthenticatedHandler(extraHandler: (request) =>
+        {
+            if (request.Method == HttpMethod.Post &&
+                request.RequestUri?.AbsolutePath.EndsWith("/log-entries") == true)
+            {
+                capturedBody = request.Content?.ReadAsStringAsync().Result;
+                return new HttpResponseMessage(HttpStatusCode.Created);
+            }
+            return null;
+        });
+
+        var previous = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo(culture);
+            using var client = new LetterboxdApiClient(TestLogger, handler);
+            await client.AuthenticateAsync("user", "pass");
+            await client.MarkAsWatchedAsync("fight-club", "2a9q", new DateTime(2026, 10, 6), liked: false);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = previous;
+        }
+
+        using var doc = JsonDocument.Parse(capturedBody!);
+        Assert.Equal("2026-10-06", doc.RootElement.GetProperty("diaryDetails").GetProperty("diaryDate").GetString());
+    }
 
     [Fact]
     public async Task MarkAsWatchedAsync_SendsCorrectBody()
@@ -373,6 +508,8 @@ public class ApiClientRateLimitTests
 {
     private static readonly ILogger TestLogger = NullLoggerFactory.Instance.CreateLogger("test");
 
+    public ApiClientRateLimitTests() => LetterboxdApiClient.ResetFilmCacheForTesting(123);
+
     [Fact]
     public async Task SendSigned_429_RetriesAfterDelay()
     {
@@ -408,6 +545,45 @@ public class ApiClientRateLimitTests
 
         Assert.Equal(2, callCount);
         Assert.Equal("abc", result.FilmId);
+    }
+}
+
+public class ApiClientSharedHttpTests
+{
+    private static readonly ILogger TestLogger = NullLoggerFactory.Instance.CreateLogger("test");
+
+    [Fact]
+    public async Task InjectedHandler_IsUsed_AndBearerTokenIsSentPerRequest()
+    {
+        var seen = new List<HttpRequestMessage>();
+        var inner = ApiTestHelpers.CreateAuthenticatedHandler();
+        var handler = new ApiMockHandler(req =>
+        {
+            seen.Add(req);
+            return inner.Invoke(req);
+        });
+
+        using var client = new LetterboxdApiClient(TestLogger, handler);
+        await client.AuthenticateAsync("shared-http-user", "pass");
+
+        var me = Assert.Single(seen, r => r.RequestUri!.AbsolutePath.EndsWith("/me"));
+        Assert.Equal("Bearer", me.Headers.Authorization?.Scheme);
+        Assert.Equal("mock-token", me.Headers.Authorization?.Parameter);
+        Assert.Null(client.HttpForTesting.DefaultRequestHeaders.Authorization);
+        Assert.All(seen, r => Assert.Contains(r.Headers.Accept, a => a.MediaType == "application/json"));
+    }
+
+    [Fact]
+    public void ProductionClients_ShareOneHttpClient_AndDisposeLeavesItUsable()
+    {
+        var first = new LetterboxdApiClient(TestLogger);
+        var shared = first.HttpForTesting;
+        first.Dispose();
+
+        using var second = new LetterboxdApiClient(TestLogger);
+
+        Assert.Same(shared, second.HttpForTesting);
+        shared.CancelPendingRequests();
     }
 }
 
@@ -456,6 +632,8 @@ internal class ApiMockHandler : HttpMessageHandler
     {
         _handler = handler;
     }
+
+    public HttpResponseMessage Invoke(HttpRequestMessage request) => _handler(request);
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {

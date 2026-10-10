@@ -67,6 +67,7 @@ public class SerializdPlaybackTests : IDisposable
         SerializdSyncHistory.ResetForTesting();
         SerializdActivity.DataPathOverride = null;
         SerializdActivity.ResetForTesting();
+        SerializdSeasonFallback.SeasonLengthsReader = SerializdSeasonFallback.ReadSeasonLengths;
         // Restore a functional equivalent of the production default so a leftover
         // override can't leak into another test class.
         PlaybackHandler.SeriesTmdbIdReader = ep =>
@@ -119,6 +120,60 @@ public class SerializdPlaybackTests : IDisposable
             Arg.Is<IReadOnlyList<int>>(l => l.Count == 1 && l[0] == 4));
         // Also creates a dated diary log for the episode (backdated to ~now, first watch = not a rewatch).
         await svc.Received(1).CreateEpisodeLogAsync(1396, 3572, 4, Arg.Any<DateTime>(), Arg.Any<int?>(), false);
+    }
+
+    [Fact]
+    public async Task Episode_InASeasonSerializdKeepsAsOne_LogsAtTheAbsoluteNumber()
+    {
+        var (user, idHex) = MakeUser();
+        AddSerializdAccount(idHex);
+        PlaybackHandler.SeriesTmdbIdReader = _ => 220542;
+        SerializdSeasonFallback.SeasonLengthsReader = _ => new Dictionary<int, int> { [1] = 24, [2] = 24 };
+
+        var svc = Substitute.For<ISerializdService>();
+        svc.ResolveSeasonIdAsync(220542, Arg.Any<int>()).Returns(Task.FromResult<int?>(null));
+        svc.ResolveSeasonIdAsync(220542, 1).Returns(Task.FromResult<int?>(9001));
+        svc.GetSeasonEpisodeCountAsync(220542, 1).Returns(Task.FromResult<int?>(48));
+        SerializdServiceFactory.OverrideForTesting = (_, _, _) => Task.FromResult(svc);
+
+        await _handler.HandlePlaybackStoppedAsync(new PlaybackStopEventArgs
+        {
+            Item = MakeEpisode(2, 1),
+            PlayedToCompletion = true,
+            Users = new List<User> { user },
+        });
+
+        await svc.Received(1).LogEpisodesAsync(220542, 9001,
+            Arg.Is<IReadOnlyList<int>>(l => l.Count == 1 && l[0] == 25));
+        await svc.Received(1).CreateEpisodeLogAsync(220542, 9001, 25, Arg.Any<DateTime>(), Arg.Any<int?>(), false);
+        Assert.True(SerializdSyncHistory.Has(idHex, "me@example.com", 220542, 2, 1, SerializdSyncHistory.KindLog));
+    }
+
+    [Fact]
+    public async Task Episode_PastTheEndOfSerializdsSingleSeason_DoesNotLog()
+    {
+        var (user, idHex) = MakeUser();
+        AddSerializdAccount(idHex);
+        PlaybackHandler.SeriesTmdbIdReader = _ => 220542;
+        SerializdSeasonFallback.SeasonLengthsReader = _ => new Dictionary<int, int> { [1] = 20, [2] = 24 };
+
+        var svc = Substitute.For<ISerializdService>();
+        svc.ResolveSeasonIdAsync(220542, Arg.Any<int>()).Returns(Task.FromResult<int?>(null));
+        svc.ResolveSeasonIdAsync(220542, 1).Returns(Task.FromResult<int?>(9001));
+        svc.GetSeasonEpisodeCountAsync(220542, 1).Returns(Task.FromResult<int?>(24));
+        SerializdServiceFactory.OverrideForTesting = (_, _, _) => Task.FromResult(svc);
+
+        await _handler.HandlePlaybackStoppedAsync(new PlaybackStopEventArgs
+        {
+            Item = MakeEpisode(2, 5),
+            PlayedToCompletion = true,
+            Users = new List<User> { user },
+        });
+
+        await svc.DidNotReceive().LogEpisodesAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<IReadOnlyList<int>>());
+        await svc.DidNotReceive().CreateEpisodeLogAsync(
+            Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<DateTime>(), Arg.Any<int?>(), Arg.Any<bool>());
+        Assert.False(SerializdSyncHistory.Has(idHex, "me@example.com", 220542, 2, 5, SerializdSyncHistory.KindLog));
     }
 
     [Fact]

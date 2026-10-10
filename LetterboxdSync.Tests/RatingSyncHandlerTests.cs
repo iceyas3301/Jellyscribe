@@ -162,6 +162,53 @@ public class RatingSyncHandlerTests : IDisposable
         Assert.Equal(0, _handler.PendingCount);
     }
 
+    [Fact]
+    public void ImportSave_BecomesTheBaseline_SoALaterFavoriteToggleIsNotARatingChange()
+    {
+        AddAccount();
+        _handler.MarkBaselineReady();
+        Save(8);                                   // the user's own rating
+        Assert.Equal(1, _handler.PendingCount);
+
+        // Diary import (or the review modal) writes a rating with Import: not pushed, and the
+        // queued 8 is superseded by it.
+        Save(6, UserDataSaveReason.Import);
+        Assert.Equal(0, _handler.PendingCount);
+
+        // A favorite toggle saves the same 6 again: nothing changed, so nothing is queued.
+        Save(6, UserDataSaveReason.UpdateUserRating);
+        Assert.Equal(0, _handler.PendingCount);
+
+        // A real change after that is still picked up.
+        Save(9);
+        Assert.Equal(1, _handler.PendingCount);
+    }
+
+    [Fact]
+    public void ImportSave_WithTheSameValue_KeepsTheUsersQueuedPush()
+    {
+        AddAccount();
+        _handler.MarkBaselineReady();
+        Save(8);
+        Save(8, UserDataSaveReason.Import);
+        Assert.True(_handler.TryGetPending(_user.Id, _movie.Id, out var pending));
+        Assert.Equal(8, pending.Rating);
+    }
+
+    [Fact]
+    public void ImportSave_ThatClearsTheRating_ClearsTheBaseline()
+    {
+        AddAccount();
+        _handler.MarkBaselineReady();
+        Save(8, UserDataSaveReason.Import);
+        Save(null, UserDataSaveReason.Import);
+        Assert.Equal(0, _handler.PendingCount);
+
+        // With no baseline, rating the film again is a change.
+        Save(8);
+        Assert.Equal(1, _handler.PendingCount);
+    }
+
     [Theory]
     [InlineData(UserDataSaveReason.UpdateUserData)]
     [InlineData(UserDataSaveReason.UpdateUserRating)]
@@ -392,6 +439,61 @@ public class RatingSyncHandlerTests : IDisposable
         Save(9, UserDataSaveReason.UpdateUserRating);
         Assert.True(_handler.TryGetPending(_user.Id, _movie.Id, out var pending));
         Assert.Equal(9, pending.Rating);
+    }
+
+    [Fact]
+    public void Baseline_SkipsUsersWithRatingSyncOff_WithoutReadingTheirLibrary()
+    {
+        AddAccount(syncRatings: false);
+        _userManager.GetUsers().Returns(new[] { _user });
+        _libraryManager.GetItemList(Arg.Any<InternalItemsQuery>()).Returns(new List<BaseItem> { _movie });
+
+        _handler.SeedBaseline(CancellationToken.None);
+
+        _libraryManager.DidNotReceive().GetItemList(Arg.Any<InternalItemsQuery>());
+        _userDataManager.DidNotReceive().GetUserData(Arg.Any<User>(), Arg.Any<BaseItem>());
+    }
+
+    // A user who turns rating sync on after startup is seeded by the next pass, so an unchanged
+    // save of a film rated long ago is still recognised as unchanged.
+    [Fact]
+    public void Baseline_UserWhoTurnsRatingSyncOnLater_IsSeededByTheNextPass()
+    {
+        var account = AddAccount(syncRatings: false);
+        _userManager.GetUsers().Returns(new[] { _user });
+        _libraryManager.GetItemList(Arg.Any<InternalItemsQuery>()).Returns(new List<BaseItem> { _movie });
+        _userDataManager.GetUserData(_user, _movie).Returns(new UserItemData { Key = "k", Rating = 8 });
+        _handler.SeedBaseline(CancellationToken.None);
+        _handler.MarkBaselineReady();
+
+        account.SyncRatings = true;
+        _handler.SeedNewlyEnabledUsers(CancellationToken.None);
+
+        Save(8, UserDataSaveReason.UpdateUserRating);
+        Assert.Equal(0, _handler.PendingCount);
+        Save(6);
+        Assert.Equal(1, _handler.PendingCount);
+    }
+
+    // Until the user is seeded, a save cannot tell an old rating from a new one, so it never
+    // publishes anything; it only becomes the baseline.
+    [Fact]
+    public void Baseline_BeforeTheUserIsSeeded_ASaveIsNeverPushed_ButBecomesTheBaseline()
+    {
+        var account = AddAccount(syncRatings: false);
+        _userManager.GetUsers().Returns(new[] { _user });
+        _libraryManager.GetItemList(Arg.Any<InternalItemsQuery>()).Returns(new List<BaseItem> { _movie });
+        _handler.SeedBaseline(CancellationToken.None);
+        _handler.MarkBaselineReady();
+        account.SyncRatings = true;
+
+        Save(8, UserDataSaveReason.UpdateUserRating); // a favorite toggle on a film rated long ago
+        Assert.Equal(0, _handler.PendingCount);
+
+        _userDataManager.GetUserData(_user, _movie).Returns(new UserItemData { Key = "k", Rating = 8 });
+        _handler.SeedNewlyEnabledUsers(CancellationToken.None);
+        Save(6);
+        Assert.Equal(1, _handler.PendingCount);
     }
 
     [Fact]

@@ -1,10 +1,14 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net.Mime;
 using System.Threading;
 using System.Threading.Tasks;
 using LetterboxdSync.Configuration;
+using Jellyfin.Data.Enums;
 using LetterboxdSync.Serializd;
+using MediaBrowser.Controller.Entities.TV;
+using MediaBrowser.Controller.Library;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -27,6 +31,7 @@ public class SerializdController : JellyfinUserApiController
     private readonly ILogger<SerializdController> _logger;
     private readonly SerializdSyncRunner _syncRunner;
     private readonly SerializdWatchlistSyncRunner _watchlistRunner;
+    private readonly ILibraryManager _libraryManager;
 
     /// <summary>
     /// Test-only override for the login check. When non-null, <see cref="Verify"/> calls this
@@ -42,18 +47,22 @@ public class SerializdController : JellyfinUserApiController
     internal Task? LastBackgroundSync { get; private set; }
 
     public SerializdController(ILogger<SerializdController> logger, SerializdSyncRunner syncRunner,
-        SerializdWatchlistSyncRunner watchlistRunner, MediaBrowser.Controller.Library.IUserManager userManager)
+        SerializdWatchlistSyncRunner watchlistRunner, IUserManager userManager, ILibraryManager libraryManager)
         : base(userManager)
     {
         _logger = logger;
         _syncRunner = syncRunner;
         _watchlistRunner = watchlistRunner;
+        _libraryManager = libraryManager;
     }
 
     public class AccountItem
     {
         public string? Email { get; set; }
+        /// <summary>Empty keeps the stored password for this email.</summary>
         public string? Password { get; set; }
+        /// <summary>The email before the edit, when the user changed it; the stored password follows. Empty means unchanged.</summary>
+        public string? OriginalEmail { get; set; }
         public bool Enabled { get; set; }
         public bool SyncFavorites { get; set; }
         public bool EnableDateFilter { get; set; }
@@ -91,7 +100,7 @@ public class SerializdController : JellyfinUserApiController
             .Select(a => new
             {
                 email = a.Email,
-                password = a.Password,
+                hasPassword = a.HasPassword,
                 enabled = a.Enabled,
                 syncFavorites = a.SyncFavorites,
                 enableDateFilter = a.EnableDateFilter,
@@ -109,13 +118,16 @@ public class SerializdController : JellyfinUserApiController
             })
             .ToList();
 
-        return Ok(new { accounts });
+        // The collection is visible server-wide, so only an admin may name it.
+        return Ok(new { accounts, canSetWatchlistName = CallerIsAdministrator() });
     }
 
     /// <summary>
     /// Bulk-replace the calling user's Serializd accounts. Other users' accounts are
     /// preserved; each submitted account is stamped with the caller's id. Mirrors the
-    /// Letterboxd per-user <c>PUT /Accounts</c>.
+    /// Letterboxd per-user <c>PUT /Accounts</c>. Only an admin's WatchlistName is applied; for
+    /// anyone else each account keeps its stored name, because the collection it names is
+    /// server-wide and a chosen name could point the sync at someone else's collection.
     /// </summary>
     [HttpPut("Accounts")]
     [ProducesResponseType(StatusCodes.Status200OK)]
@@ -137,28 +149,39 @@ public class SerializdController : JellyfinUserApiController
         var config = Plugin.Instance!.Configuration;
         var preserved = config.SerializdAccounts.Where(a => a.UserJellyfinId != userId).ToList();
         var previous = config.SerializdAccounts.Where(a => a.UserJellyfinId == userId).ToList();
-        var mine = request.Accounts.Select(req => new Configuration.SerializdAccount
+        var canName = CallerIsAdministrator();
+        var mine = request.Accounts.Select(req =>
         {
-            UserJellyfinId = userId,
-            Email = req.Email!.Trim(),
-            Password = req.Password ?? string.Empty,
-            Enabled = req.Enabled,
-            SyncFavorites = req.SyncFavorites,
-            EnableDateFilter = req.EnableDateFilter,
-            DateFilterDays = req.DateFilterDays,
-            IsPrimary = req.IsPrimary,
-            SyncWatchlist = req.SyncWatchlist,
-            SkipPreviouslySynced = req.SkipPreviouslySynced,
-            StopOnFailure = req.StopOnFailure,
-            EnableDiaryImport = req.EnableDiaryImport,
-            AutoRequestWatchlist = req.AutoRequestWatchlist,
-            BackfillAvailableRequests = req.BackfillAvailableRequests,
-            MirrorJellyseerrWatchlist = req.MirrorJellyseerrWatchlist,
-            WatchlistName = string.IsNullOrWhiteSpace(req.WatchlistName) ? null : req.WatchlistName.Trim(),
-            // A client that omits the field keeps the account's stored exclusions.
-            ExcludedLibraryIds = LibraryExclusion.ResolveForSave(req.ExcludedLibraryIds,
-                previous.FirstOrDefault(p => string.Equals(p.Email, req.Email!.Trim(), StringComparison.OrdinalIgnoreCase))?.ExcludedLibraryIds),
+            var account = new Configuration.SerializdAccount
+            {
+                UserJellyfinId = userId,
+                Email = req.Email!.Trim(),
+                Password = req.Password ?? string.Empty,
+                Enabled = req.Enabled,
+                SyncFavorites = req.SyncFavorites,
+                EnableDateFilter = req.EnableDateFilter,
+                DateFilterDays = req.DateFilterDays,
+                IsPrimary = req.IsPrimary,
+                SyncWatchlist = req.SyncWatchlist,
+                SkipPreviouslySynced = req.SkipPreviouslySynced,
+                StopOnFailure = req.StopOnFailure,
+                EnableDiaryImport = req.EnableDiaryImport,
+                AutoRequestWatchlist = req.AutoRequestWatchlist,
+                BackfillAvailableRequests = req.BackfillAvailableRequests,
+                MirrorJellyseerrWatchlist = req.MirrorJellyseerrWatchlist,
+                WatchlistName = canName
+                    ? (string.IsNullOrWhiteSpace(req.WatchlistName) ? null : req.WatchlistName.Trim())
+                    : Stored(req)?.WatchlistName,
+                // A client that omits the field keeps the account's stored exclusions.
+                ExcludedLibraryIds = LibraryExclusion.ResolveForSave(req.ExcludedLibraryIds, Stored(req)?.ExcludedLibraryIds),
+            };
+            account.KeepSecretsFrom(Stored(req));
+            return account;
         }).ToList();
+
+        // A changed email names the one it started from, so the stored secret and settings follow it.
+        SerializdAccount? Stored(AccountItem req)
+            => previous.FirstOrDefault(p => string.Equals(p.Email?.Trim(), SecretMerge.OriginalOr(req.OriginalEmail, req.Email!).Trim(), StringComparison.OrdinalIgnoreCase));
 
         config.SerializdAccounts.Clear();
         config.SerializdAccounts.AddRange(preserved);
@@ -172,9 +195,15 @@ public class SerializdController : JellyfinUserApiController
     /// <summary>Serializd activity stats for the dashboard, same shape as the Letterboxd <c>/Stats</c>.</summary>
     [HttpGet("Stats")]
     [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public ActionResult GetStats()
     {
-        var (total, success, failed, skipped, rewatches) = SerializdActivity.GetStats(GetJellyfinUsername());
+        // SerializdActivity treats a null username as "everyone", so an unresolved caller must stop here.
+        var jellyfinUsername = GetJellyfinUsername();
+        if (string.IsNullOrEmpty(jellyfinUsername))
+            return BadRequest(new { error = "Could not determine user" });
+
+        var (total, success, failed, skipped, rewatches) = SerializdActivity.GetStats(jellyfinUsername);
         var watchlist = WatchlistStats.GetTv(GetCurrentUserId() ?? string.Empty);
         return Ok(new { total, success, failed, skipped, rewatches, watchlist });
     }
@@ -182,10 +211,15 @@ public class SerializdController : JellyfinUserApiController
     /// <summary>Paged Serializd activity for the dashboard, same shape as the Letterboxd <c>/History</c>.</summary>
     [HttpGet("History")]
     [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public ActionResult GetHistory([FromQuery] int count = 50, [FromQuery] int offset = 0)
     {
+        var jellyfinUsername = GetJellyfinUsername();
+        if (string.IsNullOrEmpty(jellyfinUsername))
+            return BadRequest(new { error = "Could not determine user" });
+
         var capped = Math.Clamp(count, 1, 500);
-        var (events, total) = SerializdActivity.GetPage(Math.Max(offset, 0), capped, GetJellyfinUsername());
+        var (events, total) = SerializdActivity.GetPage(Math.Max(offset, 0), capped, jellyfinUsername);
         return Ok(new { events, total });
     }
 
@@ -193,7 +227,14 @@ public class SerializdController : JellyfinUserApiController
     {
         public string? Email { get; set; }
 
+        /// <summary>Empty uses the stored password of the account with this email.</summary>
         public string? Password { get; set; }
+
+        /// <summary>Owner of the stored account to fall back to. Honoured for administrators only.</summary>
+        public string? UserJellyfinId { get; set; }
+
+        /// <summary>The stored account's email when the form changed it; empty means <see cref="Email"/>.</summary>
+        public string? OriginalEmail { get; set; }
     }
 
     public class ReviewRequest
@@ -236,30 +277,50 @@ public class SerializdController : JellyfinUserApiController
         if (accounts.Count == 0)
             return BadRequest(new { error = "No enabled Serializd account for your user" });
 
+        var isEpisode = request.SeasonNumber is > 0 && request.EpisodeNumber is > 0;
+        // Read from the library only if Serializd lists fewer seasons than Jellyfin, and once
+        // for all accounts.
+        var seasonLengths = new Lazy<IReadOnlyDictionary<int, int>>(
+            () => SerializdSeasonFallback.SeasonLengthsReader(FindSeries(request.TmdbId)));
+
         var posted = 0;
+        var unmatched = 0;
         foreach (var account in accounts)
         {
             try
             {
                 using var service = await SerializdServiceFactory
                     .CreateAuthenticatedAsync(account.Email, account.Password, _logger).ConfigureAwait(false);
-                if (request.SeasonNumber is int season && season > 0 && request.EpisodeNumber is int episode && episode > 0)
-                    await service.CreateEpisodeReviewAsync(request.TmdbId, season, episode, request.Rating, request.ReviewText, request.ContainsSpoilers)
-                        .ConfigureAwait(false);
-                else
+                if (!isEpisode)
+                {
                     await service.CreateShowReviewAsync(request.TmdbId, request.Rating, request.ReviewText, request.ContainsSpoilers)
                         .ConfigureAwait(false);
-                posted++;
+                    posted++;
+                }
+                else if (await PostEpisodeReviewAsync(service, request, request.SeasonNumber!.Value, request.EpisodeNumber!.Value,
+                    seasonLengths).ConfigureAwait(false))
+                {
+                    posted++;
+                }
+                else
+                {
+                    unmatched++;
+                }
             }
             catch (Exception ex)
             {
-                _logger.LogError("Serializd review failed for TMDb {TmdbId} as {Email}: {Message}",
-                    request.TmdbId, account.Email, ex.Message);
+                _logger.LogError("Serializd review failed for TMDb {TmdbId} as {Account}: {Message}",
+                    request.TmdbId, LogRedaction.AccountTag(account.Email), ex.Message);
             }
         }
 
         if (posted == 0)
-            return BadRequest(new { error = "Could not post the review" });
+            return BadRequest(new
+            {
+                error = unmatched > 0
+                    ? $"Serializd has no episode matching S{request.SeasonNumber}E{request.EpisodeNumber} of this show"
+                    : "Could not post the review"
+            });
 
         // Show it in the activity feed. Source="review" so SerializdActivity.GetStats excludes it
         // from the episode-log counts (a review isn't an episode watched).
@@ -280,30 +341,83 @@ public class SerializdController : JellyfinUserApiController
     }
 
     /// <summary>
+    /// Posts an episode review where an episode log of the same episode would go: Serializd's own
+    /// season, or for a show Serializd lists as a single season, season 1 at the episode's
+    /// absolute number. False (nothing posted) when Serializd has no such season, or the episode
+    /// would land past the end of Serializd's season 1.
+    /// </summary>
+    private async Task<bool> PostEpisodeReviewAsync(ISerializdService service, ReviewRequest request, int season, int episode,
+        Lazy<IReadOnlyDictionary<int, int>> seasonLengths)
+    {
+        var target = await SerializdSeasonFallback
+            .ResolveAsync(service, request.TmdbId, season, () => seasonLengths.Value).ConfigureAwait(false);
+        if (target?.EpisodeFor(episode) is not int serializdEpisode)
+        {
+            _logger.LogWarning("Serializd has no episode matching S{Season}E{Episode} of TMDb show {TmdbId}, review not posted",
+                season, episode, request.TmdbId);
+            return false;
+        }
+
+        if (target.EpisodeOffset > 0)
+            _logger.LogInformation("Serializd lists TMDb show {TmdbId} as a single season; posting the S{Season}E{Episode} review on S1E{Absolute}",
+                request.TmdbId, season, episode, serializdEpisode);
+
+        await service.CreateEpisodeReviewAsync(request.TmdbId, target.SeasonId, serializdEpisode,
+            request.Rating, request.ReviewText, request.ContainsSpoilers).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>The caller's copy of the series, for its season lengths; null when it is not in their library.</summary>
+    private Series? FindSeries(int tmdbId)
+    {
+        var user = GetCurrentUser();
+        return user == null
+            ? null
+            : TmdbLibraryLookup.FindByTmdbId(_libraryManager, user, BaseItemKind.Series, tmdbId).OfType<Series>().FirstOrDefault();
+    }
+
+    /// <summary>
     /// Verifies a Serializd email/password by logging in. Returns the account username on
-    /// success (200) or a 400 with an error message on failure. Persists nothing.
+    /// success (200) or a 400 with an error message on failure. Persists nothing. Failed checks
+    /// are rate-limited per user and server-wide (<see cref="LoginCheckLimiter"/>), answering 429.
     /// </summary>
     [HttpPost("Verify")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
     public async Task<ActionResult> Verify([FromBody] VerifyRequest request)
     {
-        if (string.IsNullOrWhiteSpace(request?.Email) || string.IsNullOrWhiteSpace(request.Password))
+        if (string.IsNullOrWhiteSpace(request?.Email))
             return BadRequest(new { error = "Email and password are required." });
+
+        var password = string.IsNullOrWhiteSpace(request.Password)
+            ? Plugin.Instance!.Configuration.FindStoredSerializd(GetCredentialOwnerId(request.UserJellyfinId) ?? string.Empty,
+                SecretMerge.OriginalOr(request.OriginalEmail, request.Email))?.Password
+            : request.Password;
+        if (string.IsNullOrWhiteSpace(password))
+            return BadRequest(new { error = "Email and password are required." });
+
+        var limiterKey = GetCurrentUserId() ?? string.Empty;
+        if (!LoginCheckLimiter.Serializd.TryAcquire(limiterKey, out var stamp, out var retryAfter))
+        {
+            _logger.LogWarning("Serializd login check refused for {UserId}: rate limit reached", limiterKey);
+            return TooManyLoginChecks(retryAfter);
+        }
 
         try
         {
             string? username;
             if (VerifyOverrideForTesting != null)
             {
-                username = await VerifyOverrideForTesting(_logger, request.Email, request.Password).ConfigureAwait(false);
+                username = await VerifyOverrideForTesting(_logger, request.Email, password).ConfigureAwait(false);
             }
             else
             {
                 using var client = new SerializdApiClient(_logger);
-                username = await client.VerifyLoginAsync(request.Email, request.Password).ConfigureAwait(false);
+                username = await client.VerifyLoginAsync(request.Email, password).ConfigureAwait(false);
             }
 
+            LoginCheckLimiter.Serializd.Refund(limiterKey, stamp);
             return Ok(new { ok = true, username });
         }
         catch (Exception ex)
@@ -355,16 +469,22 @@ public class SerializdController : JellyfinUserApiController
     /// <summary>
     /// Mirrors the calling user's Serializd watchlist into the Jellyfin collection + playlist,
     /// on demand (the TV counterpart to the Letterboxd "Sync Watchlist Now"). 202 + background;
-    /// 400 if no Serializd account has watchlist sync enabled.
+    /// 400 if no Serializd account has watchlist sync enabled; 409 while a watchlist run is going.
     /// </summary>
     [HttpPost("SyncWatchlistNow")]
     [ProducesResponseType(StatusCodes.Status202Accepted)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
     public ActionResult SyncWatchlistNow()
     {
         var userId = GetCurrentUserId();
         if (string.IsNullOrEmpty(userId))
             return BadRequest(new { error = "Could not determine user" });
+
+        // Best-effort early answer for the dashboard; the runner's own gate is what actually
+        // stops two requests that both get past this check from running in parallel.
+        if (SerializdWatchlistSyncGate.IsRunning)
+            return Conflict(new { error = "A Serializd watchlist sync is already running" });
 
         var enabled = Plugin.Instance!.Configuration.GetEnabledSerializdAccountsForUser(userId);
         if (!enabled.Any(a => a.SyncWatchlist))

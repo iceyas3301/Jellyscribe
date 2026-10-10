@@ -95,38 +95,152 @@ public class ScraperAsyncMethodsTests : IDisposable
     }
 
     [Fact]
-    public async Task GetWatchlistTmdbIdsAsync_CloudflareChallenge_StopsCleanly()
+    public async Task GetWatchlistTmdbIdsAsync_CloudflareChallenge_Throws()
     {
         var handler = new MockHandler((request, _) =>
             new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("<html><body>Just a moment...</body></html>")
+                Content = new StringContent("<html><head><title>Just a moment...</title></head><body></body></html>")
             });
 
         var (http, scraper) = handler.CreateClients(TestLogger);
         using var _ = http;
 
-        var ids = await scraper.GetWatchlistTmdbIdsAsync("blocked");
-
-        // The challenge detection path returns whatever was found before (zero),
-        // logs a warning, and exits the loop without crashing.
-        Assert.Empty(ids);
+        // A challenge page is a short read, not an empty watchlist: returning what was found so
+        // far would let the reconcile remove every film from the playlist.
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => scraper.GetWatchlistTmdbIdsAsync("blocked"));
+        Assert.Contains("Cloudflare", ex.Message);
     }
 
     [Fact]
-    public async Task GetWatchlistTmdbIdsAsync_NonSuccessStatus_ReturnsPartial()
+    public async Task GetWatchlistTmdbIdsAsync_LaterPageFails_ThrowsRatherThanReturningTheFirstPage()
     {
-        // Simulate a 503 on the first page; the scraper should log and exit
-        // the loop, returning whatever it had collected so far (zero here).
+        TmdbCache.Set("dune-part-two", 693134);
+        var handler = new MockHandler((request, _) =>
+        {
+            var path = request.RequestUri?.AbsolutePath ?? "";
+            if (path == "/8bitproxy/watchlist/page/1/")
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        "<html><body>" +
+                        "<div data-component-class='LazyPoster' data-item-slug='dune-part-two'></div>" +
+                        "<ul><li><a href='/8bitproxy/watchlist/page/2/'>2</a></li></ul>" +
+                        "</body></html>")
+                };
+            return new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        });
+
+        var (http, scraper) = handler.CreateClients(TestLogger);
+        using var _ = http;
+
+        // Returning page one alone would make the reconcile drop everything on page two.
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => scraper.GetWatchlistTmdbIdsAsync("8bitproxy"));
+        Assert.Contains("page 2", ex.Message);
+    }
+
+    [Fact]
+    public async Task GetWatchlistTmdbIdsAsync_SiteRepeatsAPage_StopsAtOnce()
+    {
+        TmdbCache.Set("dune-part-two", 693134);
+        var requests = 0;
+        var handler = new MockHandler((request, _) =>
+        {
+            Interlocked.Increment(ref requests);
+            // Every page serves the same film and links to the next page.
+            var page = (request.RequestUri?.AbsolutePath ?? "").Split('/', StringSplitOptions.RemoveEmptyEntries).Last();
+            var next = int.Parse(page) + 1;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "<div data-component-class='LazyPoster' data-item-slug='dune-part-two'></div>" +
+                    $"<ul><li><a href='/x/watchlist/page/{next}/'>{next}</a></li></ul>")
+            };
+        });
+
+        var (http, scraper) = handler.CreateClients(TestLogger);
+        using var _ = http;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => scraper.GetWatchlistTmdbIdsAsync("x"));
+        Assert.Equal(2, requests);
+    }
+
+    [Fact]
+    public async Task GetWatchlistTmdbIdsAsync_FilmPageFails_Throws()
+    {
+        var handler = new MockHandler((request, _) =>
+        {
+            var path = request.RequestUri?.AbsolutePath ?? "";
+            if (path == "/8bitproxy/watchlist/page/1/")
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        "<div data-component-class='LazyPoster' data-item-slug='uncached-film'></div>")
+                };
+            return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+        });
+
+        var (http, scraper) = handler.CreateClients(TestLogger);
+        using var _ = http;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => scraper.GetWatchlistTmdbIdsAsync("8bitproxy"));
+    }
+
+    [Fact]
+    public async Task GetWatchlistTmdbIdsAsync_NonSuccessStatus_Throws()
+    {
+        // A 503 on the first page must not read as an empty watchlist.
         var handler = new MockHandler((request, _) =>
             new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
 
         var (http, scraper) = handler.CreateClients(TestLogger);
         using var _ = http;
 
-        var ids = await scraper.GetWatchlistTmdbIdsAsync("blocked");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => scraper.GetWatchlistTmdbIdsAsync("blocked"));
+    }
 
-        Assert.Empty(ids);
+    [Fact]
+    public async Task GetDiaryFilmEntriesAsync_ATvEntry_IsLeftOut_AndNotFetchedAgain()
+    {
+        // Hijack is a TV series Letterboxd lists as a film. Its TMDb TV id, 198102, is also the
+        // TMDb movie id of an unrelated film, which a member's library could hold.
+        TmdbCache.Set("sinners-2025", 1233413);
+        var tvPageReads = 0;
+        var handler = new MockHandler((request, _) =>
+        {
+            var path = request.RequestUri?.AbsolutePath ?? "";
+            if (path == "/8bitproxy/films/page/1/")
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        "<html><body>" +
+                        "<li class='poster-container'><div data-film-slug='sinners-2025' data-component-class='LazyPoster'></div></li>" +
+                        "<li class='poster-container'><div data-film-slug='hijack-2023' data-component-class='LazyPoster'></div>" +
+                        "<span class='rating rated-6'>★★★</span></li>" +
+                        "</body></html>")
+                };
+            if (path == "/film/hijack-2023/")
+            {
+                tvPageReads++;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        "<html><body class='film backdropped' data-tmdb-id='' data-tmdb-type='movie'>" +
+                        "<a href='https://www.themoviedb.org/tv/198102/' data-track-action='TMDB'>TMDB</a></body></html>")
+                };
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var (http, scraper) = handler.CreateClients(TestLogger);
+        using var _ = http;
+
+        var first = await scraper.GetDiaryFilmEntriesAsync("8bitproxy");
+        var second = await scraper.GetDiaryFilmEntriesAsync("8bitproxy");
+
+        Assert.Equal(new[] { 1233413 }, first.Select(e => e.TmdbId).ToArray());
+        Assert.Equal(new[] { 1233413 }, second.Select(e => e.TmdbId).ToArray());
+        Assert.Equal(1, tvPageReads);
     }
 
     [Fact]

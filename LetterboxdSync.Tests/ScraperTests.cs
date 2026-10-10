@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Threading;
@@ -14,6 +15,9 @@ public class ScraperTests
 {
     private static readonly Uri BaseUri = new("https://letterboxd.com/");
     private static readonly ILogger TestLogger = NullLoggerFactory.Instance.CreateLogger("test");
+
+    // Lookups are cached process-wide, and two tests here resolve the same id to different films.
+    public ScraperTests() => LetterboxdScraper.ResetFilmCacheForTesting(693134, 99999, 12345, 198102);
 
     [Fact]
     public async Task LookupFilmByTmdbId_ValidFilm_ReturnsFilmResult()
@@ -57,6 +61,121 @@ public class ScraperTests
         Assert.Equal("PROD-dune", result.ProductionId);
     }
 
+    // Shapes copied from live letterboxd.com pages on 2026-10-08. A film (The Godfather) carries its
+    // TMDb movie id on the body and a TMDb button to /movie/. A TV entry Letterboxd lists as a film
+    // (Chernobyl) still says data-tmdb-type="movie", has an empty data-tmdb-id, and only its TMDb
+    // button links to /tv/.
+    private const string MoviePage =
+        "<html><body class=\"film backdropped\" data-tmdb-id=\"238\" data-tmdb-type=\"movie\">" +
+        "<a href=\"https://www.themoviedb.org/movie/238/\" class=\"micro-button track-event\" data-track-action=\"TMDB\" target=\"_blank\">TMDB</a></body></html>";
+    private const string TvPage =
+        "<html><body class=\"film backdropped\" data-tmdb-id=\"\" data-tmdb-type=\"movie\">" +
+        "<a href=\"https://www.themoviedb.org/tv/87108/\" class=\"micro-button track-event\" data-track-action=\"TMDB\" target=\"_blank\">TMDB</a></body></html>";
+
+    [Fact]
+    public void ReadTmdbEntry_MoviePage_ReturnsTheMovieId()
+        => Assert.Equal((238, false), LetterboxdScraper.ReadTmdbEntry(MoviePage));
+
+    [Fact]
+    public void ReadTmdbEntry_TvPage_IsNotAMovie()
+        => Assert.Equal((null, true), LetterboxdScraper.ReadTmdbEntry(TvPage));
+
+    [Fact]
+    public void ReadTmdbEntry_TvButtonWinsOverAMovieTypeAndAnId()
+        => Assert.Equal((null, true), LetterboxdScraper.ReadTmdbEntry(
+            "<html><body data-tmdb-id=\"198102\" data-tmdb-type=\"movie\"><a href=\"https://www.themoviedb.org/tv/198102/\" data-track-action=\"TMDB\">TMDB</a></body></html>"));
+
+    [Fact]
+    public void ReadTmdbEntry_WithoutTheTypeAttribute_FallsBackToTheTmdbLink()
+    {
+        Assert.Equal((null, true), LetterboxdScraper.ReadTmdbEntry(
+            "<html><body data-tmdb-id=\"198102\"><a href=\"https://www.themoviedb.org/tv/198102/\" data-track-action=\"TMDB\">TMDB</a></body></html>"));
+        Assert.Equal((198102, false), LetterboxdScraper.ReadTmdbEntry(
+            "<html><body data-tmdb-id=\"198102\"><a href=\"https://www.themoviedb.org/movie/198102/\" data-track-action=\"TMDB\">TMDB</a></body></html>"));
+    }
+
+    [Fact]
+    public void ReadTmdbEntry_ATvLinkInAReview_DoesNotMakeTheFilmTv()
+        => Assert.Equal((198102, false), LetterboxdScraper.ReadTmdbEntry(
+            "<html><body data-tmdb-id=\"198102\">" +
+            "<div class=\"review\"><a href=\"https://www.themoviedb.org/tv/1399/\">a show I liked</a></div>" +
+            "<a href=\"https://www.themoviedb.org/movie/198102/\" data-track-action=\"TMDB\">TMDB</a></body></html>"));
+
+    [Theory]
+    [InlineData("film")]
+    [InlineData("Movie ")]
+    public void ReadTmdbEntry_AnUnfamiliarType_StillCountsAsAFilm(string type)
+        => Assert.Equal((198102, false), LetterboxdScraper.ReadTmdbEntry($"<html><body data-tmdb-id=\"198102\" data-tmdb-type=\"{type}\"></body></html>"));
+
+    [Fact]
+    public void ReadTmdbEntry_OlderMarkupWithNeither_StillCountsAsAFilm()
+        => Assert.Equal((550, false), LetterboxdScraper.ReadTmdbEntry("<html><body data-tmdb-id=\"550\"></body></html>"));
+
+    [Theory]
+    [InlineData("<html><body></body></html>")]
+    [InlineData("<html><body data-tmdb-id=\"\"></body></html>")]
+    [InlineData("<html><body data-tmdb-id=\"abc\"></body></html>")]
+    public void ReadTmdbEntry_NoUsableId_ReturnsNull(string html)
+        => Assert.Equal((null, false), LetterboxdScraper.ReadTmdbEntry(html));
+
+    [Fact]
+    public async Task LookupFilmByTmdbId_ResolvingToATvEntry_IsNotFound()
+    {
+        var filmPageRead = false;
+        var handler = new ScraperMockHandler((request, http) =>
+        {
+            var path = request.RequestUri?.PathAndQuery ?? "";
+            if (path.StartsWith("/tmdb/198102"))
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        "<html><head><link rel=\"canonical\" href=\"https://letterboxd.com/film/hijack-2023/\" /></head></html>")
+                };
+            if (path == "/film/hijack-2023/")
+            {
+                filmPageRead = true;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(TvPage.Replace("<a ", "<div data-film-slug=\"hijack-2023\" data-film-id=\"1\"></div><a "))
+                };
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var (http, scraper) = handler.CreateClients(TestLogger);
+        using var _ = http;
+
+        await Assert.ThrowsAsync<FilmNotFoundException>(() => scraper.LookupFilmByTmdbIdAsync(198102));
+        Assert.True(filmPageRead);
+    }
+
+    [Fact]
+    public async Task CloudflareBackoff_StopsWhenTheSyncIsCancelled()
+    {
+        var requests = 0;
+        using var cts = new CancellationTokenSource();
+        var handler = new ScraperMockHandler((_, _) =>
+        {
+            requests++;
+            // The sync is stopped during the backoff that follows this 403 (cancelling here would
+            // land on the send, which also takes the token).
+            cts.CancelAfter(TimeSpan.FromMilliseconds(300));
+            return new HttpResponseMessage(HttpStatusCode.Forbidden);
+        });
+
+        var (http, _) = handler.CreateClients(TestLogger);
+        using var __ = http;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        // A 403 backs off 15 s or more before the next attempt; an uncancellable backoff would
+        // sit that out before the next send noticed the cancellation.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => http.GetWithCloudflareRetryAsync("/tmdb/1", cancellationToken: cts.Token));
+
+        Assert.Equal(1, requests);
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"waited {clock.Elapsed}");
+    }
+
     [Fact]
     public async Task LookupFilmByTmdbId_NotFound_Throws()
     {
@@ -68,7 +187,7 @@ public class ScraperTests
         var (http, scraper) = handler.CreateClients(TestLogger);
         using var _ = http;
 
-        await Assert.ThrowsAsync<Exception>(() => scraper.LookupFilmByTmdbIdAsync(99999));
+        await Assert.ThrowsAsync<FilmNotFoundException>(() => scraper.LookupFilmByTmdbIdAsync(99999));
     }
 
     [Fact]
@@ -268,6 +387,85 @@ public class ScraperTests
 
         Assert.Null(info.LastDate);
         Assert.False(info.HasAnyEntry);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    public async Task GetDiaryInfo_ErrorStatus_ThrowsInsteadOfReportingNoEntries(HttpStatusCode status)
+    {
+        var handler = new ScraperMockHandler((_, _) => new HttpResponseMessage(status));
+        var (http, scraper) = handler.CreateClients(TestLogger);
+        using var _ = http;
+
+        await Assert.ThrowsAsync<DiaryCheckFailedException>(() => scraper.GetDiaryInfoAsync("test-film", "testuser"));
+    }
+
+    [Fact]
+    public async Task GetDiaryInfo_CloudflareChallenge_Throws()
+    {
+        var handler = new ScraperMockHandler((_, _) => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("<html><title>Just a moment...</title></html>")
+        });
+        var (http, scraper) = handler.CreateClients(TestLogger);
+        using var _ = http;
+
+        await Assert.ThrowsAsync<DiaryCheckFailedException>(() => scraper.GetDiaryInfoAsync("test-film", "testuser"));
+    }
+
+    [Theory]
+    [InlineData("<html><head><title>Just a moment...</title></head></html>", true)]
+    [InlineData("<html><head><title>Attention Required! | Cloudflare</title></head></html>", true)]
+    [InlineData("<html><head><title>Diary</title></head><body><p>Just a moment of silence, attention required.</p></body></html>", false)]
+    [InlineData("<html><head><title>Diary</title></head><body><script src=\"/cdn-cgi/challenge-platform/scripts/jsd/main.js\"></script></body></html>", false)]
+    public void IsCloudflareChallenge_LooksAtTheChallengeMarkersNotPageText(string html, bool expected)
+    {
+        Assert.Equal(expected, LetterboxdScraper.IsCloudflareChallenge(html));
+    }
+
+    [Fact]
+    public async Task ScrapingService_DiaryCheck_UsesTheSlugForTheFilmIdItReturned()
+    {
+        var diaryPaths = new List<string>();
+        var handler = new ScraperMockHandler((request, _) =>
+        {
+            var path = request.RequestUri?.AbsolutePath ?? "";
+            if (path.StartsWith("/tmdb/693134"))
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("<html><head><link rel=\"canonical\" href=\"https://letterboxd.com/film/dune-part-two/\" /></head></html>")
+                };
+            if (path == "/film/dune-part-two/")
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("<div data-film-slug=\"dune-part-two\" data-film-id=\"945898\"></div>")
+                };
+            if (path.EndsWith("/diary/"))
+            {
+                lock (diaryPaths) diaryPaths.Add(path);
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+        using var service = new ScrapingLetterboxdService(TestLogger, handler);
+
+        var film = await service.LookupFilmByTmdbIdAsync(693134);
+        await service.GetDiaryInfoAsync(film.FilmId, "testuser");
+
+        // Callers pass back FilmId (the numeric id here); the diary page lives at the slug.
+        Assert.Equal("945898", film.FilmId);
+        Assert.Equal(new[] { "/testuser/film/dune-part-two/diary/" }, diaryPaths);
+    }
+
+    [Fact]
+    public async Task ScrapingService_DiaryCheck_RefusesANumericIdItNeverLookedUp()
+    {
+        var handler = new ScraperMockHandler((_, _) => new HttpResponseMessage(HttpStatusCode.NotFound));
+        using var service = new ScrapingLetterboxdService(TestLogger, handler);
+
+        await Assert.ThrowsAsync<DiaryCheckFailedException>(() => service.GetDiaryInfoAsync("945898", "testuser"));
     }
 
     internal class ScraperMockHandler : HttpMessageHandler

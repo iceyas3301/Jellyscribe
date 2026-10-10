@@ -10,6 +10,7 @@ using LetterboxdSync.Configuration;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Model.Entities;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using NSubstitute;
 using Xunit;
@@ -62,10 +63,41 @@ public class LetterboxdControllerTests
 
     // ----- GetStats / GetHistory -----
 
+    /// <summary>Harness whose caller resolves to a real Jellyfin user, which /Stats and /History require.</summary>
+    private static ControllerTestHarness ResolvedUserHarness()
+    {
+        var user = new User("alice", "test-provider-id", "test-reset-id");
+        var h = new ControllerTestHarness(currentUserId: user.Id.ToString("N"));
+        h.UserManager.GetUsers().Returns(new List<User> { user });
+        return h;
+    }
+
+    [Fact]
+    public void GetStats_UnresolvedUser_ReturnsBadRequest()
+    {
+        using var h = new ControllerTestHarness(currentUserId: UserId);
+
+        var result = h.Controller.GetStats();
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal("Could not determine user", Prop<string>(result, "error"));
+    }
+
+    [Fact]
+    public void GetHistory_UnresolvedUser_ReturnsBadRequest()
+    {
+        using var h = new ControllerTestHarness(currentUserId: null);
+
+        var result = h.Controller.GetHistory();
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal("Could not determine user", Prop<string>(result, "error"));
+    }
+
     [Fact]
     public void GetStats_ReturnsCurrentStats()
     {
-        using var h = new ControllerTestHarness(currentUserId: UserId);
+        using var h = ResolvedUserHarness();
 
         var result = h.Controller.GetStats();
 
@@ -149,7 +181,7 @@ public class LetterboxdControllerTests
     [Fact]
     public void GetHistory_DefaultParams_ReturnsPageWithCount()
     {
-        using var h = new ControllerTestHarness(currentUserId: UserId);
+        using var h = ResolvedUserHarness();
 
         var result = h.Controller.GetHistory();
 
@@ -159,152 +191,45 @@ public class LetterboxdControllerTests
     }
 
     [Fact]
-    public void GetHistory_CapsCountAt200()
+    public void GetHistory_CapsCountAt250()
     {
-        using var h = new ControllerTestHarness();
+        using var h = ResolvedUserHarness();
 
         var result = h.Controller.GetHistory(count: 9999);
 
-        Assert.Equal(200, Prop<int>(result, "count"));
+        Assert.Equal(250, Prop<int>(result, "count"));
+    }
+
+    [Fact]
+    public void GetHistory_EveryPageSizeTheDashboardsAskFor_IsServedInFull()
+    {
+        var asm = typeof(Plugin).Assembly;
+        var requested = new List<int>();
+        foreach (var page in new[] { "userPage.html", "configPage.html", "jellyscribe.js" })
+        {
+            var resource = asm.GetManifestResourceNames().Single(n => n.EndsWith(".Web." + page, StringComparison.Ordinal));
+            using var reader = new StreamReader(asm.GetManifestResourceStream(resource)!);
+            var html = reader.ReadToEnd();
+            // Literal sizes in the request ("/History?count=250", "/History', { count: 250") and the
+            // page-size settings the requests use ("histChunk: 200", "pageSize: 25").
+            requested.AddRange(System.Text.RegularExpressions.Regex
+                .Matches(html, @"/History(?:\?count=|'\s*,\s*\{\s*count:\s*)(\d+)|\b(?:histChunk|pageSize):\s*(\d+)")
+                .Select(m => int.Parse(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture)));
+        }
+
+        Assert.NotEmpty(requested);
+        Assert.All(requested, n => Assert.True(n <= LetterboxdController.MaxHistoryPage,
+            $"a dashboard asks for {n} history rows but the endpoint serves at most {LetterboxdController.MaxHistoryPage}"));
     }
 
     [Fact]
     public void GetHistory_NegativeOffset_ClampedToZero()
     {
-        using var h = new ControllerTestHarness();
+        using var h = ResolvedUserHarness();
 
         var result = h.Controller.GetHistory(offset: -50);
 
         Assert.Equal(0, Prop<int>(result, "offset"));
-    }
-
-    // ----- GetAccount -----
-
-    [Fact]
-    public void GetAccount_NoUserClaim_ReturnsBadRequest()
-    {
-        using var h = new ControllerTestHarness(currentUserId: null);
-
-        var result = h.Controller.GetAccount();
-
-        Assert.IsType<BadRequestObjectResult>(result);
-        Assert.Equal("Could not determine user", Prop<string>(result, "error"));
-    }
-
-    [Fact]
-    public void GetAccount_NoConfiguredAccount_ReturnsDefaultsWithIsConfiguredFalse()
-    {
-        using var h = new ControllerTestHarness(currentUserId: UserId);
-
-        var result = h.Controller.GetAccount();
-
-        Assert.IsType<OkObjectResult>(result);
-        Assert.False(Prop<bool>(result, "isConfigured"));
-        Assert.False(Prop<bool>(result, "enabled"));
-        Assert.True(Prop<bool>(result, "skipPreviouslySynced"));
-        Assert.Equal(7, Prop<int>(result, "dateFilterDays"));
-        Assert.Equal(string.Empty, Prop<string>(result, "letterboxdUsername"));
-    }
-
-    [Fact]
-    public void GetAccount_WithConfiguredAccount_ReturnsAccountFields()
-    {
-        using var h = new ControllerTestHarness(currentUserId: UserId);
-        var account = h.AddAccount(UserId, "8bitproxy");
-        account.SyncFavorites = true;
-        account.EnableDateFilter = true;
-        account.DateFilterDays = 30;
-
-        var result = h.Controller.GetAccount();
-
-        Assert.True(Prop<bool>(result, "isConfigured"));
-        Assert.Equal("8bitproxy", Prop<string>(result, "letterboxdUsername"));
-        Assert.True(Prop<bool>(result, "enabled"));
-        Assert.True(Prop<bool>(result, "syncFavorites"));
-        Assert.True(Prop<bool>(result, "enableDateFilter"));
-        Assert.Equal(30, Prop<int>(result, "dateFilterDays"));
-    }
-
-    [Fact]
-    public void GetAccount_DifferentUserAccount_NotReturned()
-    {
-        using var h = new ControllerTestHarness(currentUserId: UserId);
-        h.AddAccount(OtherUserId, "someoneelse");
-
-        var result = h.Controller.GetAccount();
-
-        Assert.False(Prop<bool>(result, "isConfigured"));
-    }
-
-    // ----- PutAccount -----
-
-    [Fact]
-    public void PutAccount_NoUserClaim_ReturnsBadRequest()
-    {
-        using var h = new ControllerTestHarness(currentUserId: null);
-
-        var result = h.Controller.PutAccount(new AccountUpdateRequest());
-
-        Assert.IsType<BadRequestObjectResult>(result);
-    }
-
-    [Fact]
-    public void PutAccount_CreatesNewAccountWhenNoneExists()
-    {
-        using var h = new ControllerTestHarness(currentUserId: UserId);
-
-        var result = h.Controller.PutAccount(new AccountUpdateRequest
-        {
-            LetterboxdUsername = "fresh",
-            LetterboxdPassword = "pw",
-            Enabled = true,
-            DateFilterDays = 14,
-            SyncFavorites = true
-        });
-
-        Assert.IsType<OkObjectResult>(result);
-        var account = h.Config.Accounts.Single(a => a.UserJellyfinId == UserId);
-        Assert.Equal("fresh", account.LetterboxdUsername);
-        Assert.True(account.Enabled);
-        Assert.Equal(14, account.DateFilterDays);
-        Assert.True(account.SyncFavorites);
-    }
-
-    [Fact]
-    public void PutAccount_UpdatesExistingAccountInPlace()
-    {
-        using var h = new ControllerTestHarness(currentUserId: UserId);
-        h.AddAccount(UserId, "old", enabled: false);
-
-        h.Controller.PutAccount(new AccountUpdateRequest
-        {
-            LetterboxdUsername = "new",
-            LetterboxdPassword = "newpw",
-            Enabled = true
-        });
-
-        Assert.Single(h.Config.Accounts);
-        var account = h.Config.Accounts[0];
-        Assert.Equal("new", account.LetterboxdUsername);
-        Assert.Equal("newpw", account.LetterboxdPassword);
-        Assert.True(account.Enabled);
-    }
-
-    [Fact]
-    public void PutAccount_DoesNotTouchOtherUsersAccounts()
-    {
-        using var h = new ControllerTestHarness(currentUserId: UserId);
-        h.AddAccount(OtherUserId, "untouched", enabled: true);
-
-        h.Controller.PutAccount(new AccountUpdateRequest
-        {
-            LetterboxdUsername = "mine",
-            Enabled = false
-        });
-
-        var other = h.Config.Accounts.Single(a => a.UserJellyfinId == OtherUserId);
-        Assert.Equal("untouched", other.LetterboxdUsername);
-        Assert.True(other.Enabled);
     }
 
     // ----- GetAccounts / PutAccounts (multi-account, per-user) -----
@@ -337,6 +262,63 @@ public class LetterboxdControllerTests
         Assert.Contains("mine-a", usernames);
         Assert.Contains("mine-b", usernames);
         Assert.DoesNotContain("someone-else", usernames);
+    }
+
+    private static void SetRole(ControllerTestHarness h, bool admin)
+        => h.Controller.ControllerContext.HttpContext.User = new System.Security.Claims.ClaimsPrincipal(
+            new System.Security.Claims.ClaimsIdentity(new[]
+            {
+                new System.Security.Claims.Claim("Jellyfin-UserId", UserId),
+                new System.Security.Claims.Claim(System.Security.Claims.ClaimTypes.Role, admin ? "Administrator" : "User"),
+            }, "Test"));
+
+    [Fact]
+    public void PutAccounts_NonAdmin_CannotNameThePlaylist_KeepsTheStoredName()
+    {
+        using var h = new ControllerTestHarness(currentUserId: UserId);
+        h.AddAccount(UserId, "mine").PlaylistName = "Named By Admin";
+        SetRole(h, admin: false);
+
+        var result = h.Controller.PutAccounts(new AccountsUpdateRequest
+        {
+            Accounts = new List<AccountUpdateRequest>
+            {
+                new() { LetterboxdUsername = "mine", Enabled = true, PlaylistName = "Staff Picks" },
+                new() { LetterboxdUsername = "fresh", Enabled = true, PlaylistName = "Staff Picks" },
+            }
+        });
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Equal("Named By Admin", h.Config.Accounts.Single(a => a.LetterboxdUsername == "mine").PlaylistName);
+        Assert.Null(h.Config.Accounts.Single(a => a.LetterboxdUsername == "fresh").PlaylistName);
+    }
+
+    [Fact]
+    public void PutAccounts_Admin_CanNameThePlaylist()
+    {
+        using var h = new ControllerTestHarness(currentUserId: UserId);
+        h.AddAccount(UserId, "mine");
+        SetRole(h, admin: true);
+
+        h.Controller.PutAccounts(new AccountsUpdateRequest
+        {
+            Accounts = new List<AccountUpdateRequest> { new() { LetterboxdUsername = "mine", PlaylistName = " Our Films " } }
+        });
+
+        Assert.Equal("Our Films", h.Config.Accounts.Single(a => a.LetterboxdUsername == "mine").PlaylistName);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GetAccounts_TellsThePageWhetherTheCallerMayNameThePlaylist(bool admin)
+    {
+        using var h = new ControllerTestHarness(currentUserId: UserId);
+        h.AddAccount(UserId, "mine");
+        SetRole(h, admin);
+
+        var ok = Assert.IsType<OkObjectResult>(h.Controller.GetAccounts());
+        Assert.Equal(admin, Prop<bool>(ok, "canSetWatchlistName"));
     }
 
     [Fact]
@@ -483,6 +465,40 @@ public class LetterboxdControllerTests
 
         var mine = h.Config.Accounts.Where(a => a.UserJellyfinId == UserId).ToList();
         Assert.Single(mine, a => a.IsPrimary);
+    }
+
+    // Households share one Letterboxd account across several Jellyfin users. The token cache is
+    // keyed by username + password hash, so saving a username another user already linked is safe
+    // and must keep working; don't reintroduce an "already linked" rejection.
+    [Fact]
+    public void PutAccounts_UsernameAlsoLinkedByOtherUser_Saves()
+    {
+        using var h = new ControllerTestHarness(currentUserId: UserId);
+        h.AddAccount(OtherUserId, "household");
+
+        var result = h.Controller.PutAccounts(new AccountsUpdateRequest
+        {
+            Accounts = new() { new AccountUpdateRequest { LetterboxdUsername = "household", LetterboxdPassword = "pw", Enabled = true } }
+        });
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Single(h.Config.Accounts, a => a.UserJellyfinId == UserId && a.LetterboxdUsername == "household");
+        Assert.Single(h.Config.Accounts, a => a.UserJellyfinId == OtherUserId && a.LetterboxdUsername == "household");
+    }
+
+    [Fact]
+    public void PutAccounts_SameUserResavesOwnUsername_Succeeds()
+    {
+        using var h = new ControllerTestHarness(currentUserId: UserId);
+        h.AddAccount(UserId, "mine");
+
+        var result = h.Controller.PutAccounts(new AccountsUpdateRequest
+        {
+            Accounts = new() { new AccountUpdateRequest { LetterboxdUsername = "mine", LetterboxdPassword = "new", Enabled = true } }
+        });
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Equal("new", h.Config.Accounts.Single(a => a.UserJellyfinId == UserId).LetterboxdPassword);
     }
 
     // ----- StartSync -----
@@ -654,8 +670,10 @@ public class LetterboxdControllerTests
 
             Assert.IsType<OkObjectResult>(result);
             Assert.True(Prop<bool>(result, "success"));
+            // With no earlier diary entry it is a new one, dated today, and the date is sent
+            // explicitly so the history row records the same day the entry has.
             await service.Received(1).PostReviewAsync(
-                "sinners", "great", false, false, null, 4.5, 1233413);
+                "sinners", "great", false, false, Helpers.ToLocalViewingDate(System.DateTime.UtcNow).ToString("yyyy-MM-dd"), 4.5, 1233413);
         }
         finally
         {
@@ -713,9 +731,11 @@ public class LetterboxdControllerTests
             });
 
             Assert.IsType<OkObjectResult>(result);
+            // Every argument is a matcher: NSubstitute cannot tell a literal null from a matcher's slot.
             await service.Received(1).PostReviewAsync(
-                "sinners", null, false, true,
-                NSubstitute.Arg.Any<string?>(), NSubstitute.Arg.Any<double?>(), 1233413);
+                NSubstitute.Arg.Is("sinners"), NSubstitute.Arg.Is<string?>(t => t == null),
+                NSubstitute.Arg.Is(false), NSubstitute.Arg.Is(true),
+                NSubstitute.Arg.Any<string?>(), NSubstitute.Arg.Any<double?>(), NSubstitute.Arg.Is<int?>(1233413));
         }
         finally
         {
@@ -723,33 +743,16 @@ public class LetterboxdControllerTests
         }
     }
 
-    // ----- TestConnection -----
-
-    [Fact]
-    public async Task TestConnection_MissingCredentials_ReturnsBadRequest()
-    {
-        using var h = new ControllerTestHarness();
-
-        var result = await h.Controller.TestConnection(new TestConnectionRequest());
-
-        Assert.IsType<BadRequestObjectResult>(result);
-        Assert.False(Prop<bool>(result, "success"));
-    }
-
-    [Fact]
-    public async Task TestConnection_OnlyUsername_ReturnsBadRequest()
-    {
-        using var h = new ControllerTestHarness();
-
-        var result = await h.Controller.TestConnection(new TestConnectionRequest
-        {
-            LetterboxdUsername = "user"
-        });
-
-        Assert.IsType<BadRequestObjectResult>(result);
-    }
-
     // ----- TestJellyseerr -----
+
+    [Fact]
+    public void TestJellyseerr_RequiresElevation()
+    {
+        var method = typeof(LetterboxdController).GetMethod(nameof(LetterboxdController.TestJellyseerr));
+        var attr = method!.GetCustomAttribute<AuthorizeAttribute>();
+
+        Assert.Equal("RequiresElevation", attr?.Policy);
+    }
 
     [Fact]
     public async Task TestJellyseerr_NotConfigured_ReturnsBadRequest()
@@ -773,6 +776,42 @@ public class LetterboxdControllerTests
         });
 
         Assert.IsType<BadRequestObjectResult>(result);
+    }
+
+    private sealed class ThrowingHandler : System.Net.Http.HttpMessageHandler
+    {
+        public const string Detail = "No connection could be made to seerr-internal.example:5055 (Connection refused)";
+
+        protected override System.Threading.Tasks.Task<System.Net.Http.HttpResponseMessage> SendAsync(
+            System.Net.Http.HttpRequestMessage request, System.Threading.CancellationToken cancellationToken)
+            => throw new System.Net.Http.HttpRequestException(Detail);
+    }
+
+    [Fact]
+    public async Task TestJellyseerr_ConnectionFails_ReturnsGenericErrorWithoutExceptionText()
+    {
+        using var h = new ControllerTestHarness();
+        // The real failure is an HttpRequestException whose message names the host and port.
+        LetterboxdController.SeerrTestHandlerForTesting = new ThrowingHandler();
+        try
+        {
+            var result = await h.Controller.TestJellyseerr(new JellyseerrTestRequest
+            {
+                Url = "http://seerr-internal.example:5055",
+                ApiKey = "test-key"
+            });
+
+            Assert.IsType<BadRequestObjectResult>(result);
+            Assert.False(Prop<bool>(result, "success"));
+            var error = Prop<string>(result, "error");
+            Assert.False(string.IsNullOrEmpty(error));
+            Assert.DoesNotContain("seerr-internal", error!, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("refused", error!, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            LetterboxdController.SeerrTestHandlerForTesting = null;
+        }
     }
 
     // ----- GetLogs -----
@@ -995,59 +1034,6 @@ public class LetterboxdControllerTests
         Assert.IsType<AcceptedResult>(result);
     }
 
-    // ----- TestConnection: success + failure via the factory seam -----
-
-    [Fact]
-    public async Task TestConnection_AuthSucceeds_ReturnsOk()
-    {
-        using var h = new ControllerTestHarness();
-
-        var service = Substitute.For<ILetterboxdService>();
-        LetterboxdServiceFactory.OverrideForTesting = (_, _, _, _, _) =>
-            System.Threading.Tasks.Task.FromResult(service);
-        try
-        {
-            var result = await h.Controller.TestConnection(new TestConnectionRequest
-            {
-                LetterboxdUsername = "8bitproxy",
-                LetterboxdPassword = "secret"
-            });
-
-            Assert.IsType<OkObjectResult>(result);
-            Assert.True(Prop<bool>(result, "success"));
-            Assert.Equal("8bitproxy", Prop<string>(result, "letterboxdUsername"));
-        }
-        finally
-        {
-            LetterboxdServiceFactory.OverrideForTesting = null;
-        }
-    }
-
-    [Fact]
-    public async Task TestConnection_AuthThrows_ReturnsBadRequestWithError()
-    {
-        using var h = new ControllerTestHarness();
-
-        LetterboxdServiceFactory.OverrideForTesting = (_, _, _, _, _) =>
-            throw new Exception("bad credentials");
-        try
-        {
-            var result = await h.Controller.TestConnection(new TestConnectionRequest
-            {
-                LetterboxdUsername = "8bitproxy",
-                LetterboxdPassword = "wrong"
-            });
-
-            Assert.IsType<BadRequestObjectResult>(result);
-            Assert.False(Prop<bool>(result, "success"));
-            Assert.Contains("bad credentials", Prop<string>(result, "error") ?? string.Empty);
-        }
-        finally
-        {
-            LetterboxdServiceFactory.OverrideForTesting = null;
-        }
-    }
-
     // ----- PostReview: named-account targeting + Jellyfin rating writeback -----
 
     [Fact]
@@ -1182,19 +1168,6 @@ public class LetterboxdControllerTests
             .Single(a => (string?)a.GetType().GetProperty("letterboxdUsername")!.GetValue(a) == "mine");
         Assert.Equal(new[] { anime },
             (IEnumerable<string>)echoed.GetType().GetProperty("excludedLibraryIds")!.GetValue(echoed)!);
-    }
-
-    [Fact]
-    public void PutAccount_OmittedExcludedLibraryIds_KeepsStoredList()
-    {
-        using var h = new ControllerTestHarness(currentUserId: UserId);
-        var account = h.AddAccount(UserId, "mine");
-        account.ExcludedLibraryIds.Add("0c5b2a1e9f3d4c7a8b6e5d4c3b2a1f0e");
-
-        h.Controller.PutAccount(new AccountUpdateRequest { LetterboxdUsername = "mine", ExcludedLibraryIds = null });
-
-        Assert.Equal(new[] { "0c5b2a1e9f3d4c7a8b6e5d4c3b2a1f0e" },
-            h.Config.Accounts.Single(a => a.UserJellyfinId == UserId).ExcludedLibraryIds);
     }
 
     [Fact]

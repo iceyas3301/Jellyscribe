@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using HtmlAgilityPack;
 
 namespace LetterboxdSync;
@@ -8,15 +10,25 @@ namespace LetterboxdSync;
 public static class Helpers
 {
     /// <summary>
+    /// Key for the process-wide token caches: the account plus a SHA-256 of its secret, so a
+    /// cached token is only reused or refreshed by a caller presenting the same secret. Lives in
+    /// memory only; never log it.
+    /// </summary>
+    internal static string TokenCacheKey(string account, string secret)
+        => $"{account}\n{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(secret)))}";
+
+    /// <summary>
     /// Map a Jellyfin rating (0-10) to a Letterboxd rating (0.5-5.0 in 0.5 steps).
-    /// Returns null if the input is null or out of range.
+    /// Returns null if the input is null or out of range. Halves round away from zero (4.5 becomes
+    /// 2.5 stars), the same way the Serializd mapping rounds, so one Jellyfin rating lands on the
+    /// same value on both services.
     /// </summary>
     public static double? MapRating(double? jellyfinRating)
     {
         if (!jellyfinRating.HasValue || jellyfinRating.Value <= 0)
             return null;
 
-        var mapped = Math.Round(jellyfinRating.Value / 2.0 * 2) / 2.0;
+        var mapped = Math.Round(jellyfinRating.Value, MidpointRounding.AwayFromZero) / 2.0;
         return Math.Clamp(mapped, 0.5, 5.0);
     }
 
@@ -103,6 +115,32 @@ public static class Helpers
             return false;
 
         return lastDiaryDate.Value.Date == viewingDate.Date;
+    }
+
+    /// <summary>
+    /// Test hook for the server's time zone. Production leaves it null and uses
+    /// <see cref="TimeZoneInfo.Local"/>, the zone <see cref="DateTime.Now"/> reads.
+    /// </summary>
+    internal static TimeZoneInfo? LocalTimeZoneOverride { get; set; }
+
+    /// <summary>
+    /// The calendar day, in the server's own time zone, of a Jellyfin play timestamp. Jellyfin
+    /// stores LastPlayedDate in UTC (often with an unspecified Kind), so taking its .Date gives
+    /// the UTC day, which for an evening watch west of UTC (or a morning watch east of it) is a
+    /// different day from the one the viewer lived. Both the scheduled sync and the real-time
+    /// sync use this one function, so a watch is logged, and recognised as already logged, on
+    /// the same day whichever path reaches it first.
+    /// </summary>
+    public static DateTime ToLocalViewingDate(DateTime playedUtc)
+    {
+        var utc = playedUtc.Kind switch
+        {
+            DateTimeKind.Utc => playedUtc,
+            DateTimeKind.Local => playedUtc.ToUniversalTime(),
+            _ => DateTime.SpecifyKind(playedUtc, DateTimeKind.Utc),
+        };
+        var zone = LocalTimeZoneOverride ?? TimeZoneInfo.Local;
+        return DateTime.SpecifyKind(TimeZoneInfo.ConvertTimeFromUtc(utc, zone).Date, DateTimeKind.Unspecified);
     }
 
     // Some clients send an explicit but bogus datePlayed (e.g. an uninitialized JS Date

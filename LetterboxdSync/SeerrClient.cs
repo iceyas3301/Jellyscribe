@@ -16,9 +16,22 @@ namespace LetterboxdSync;
 /// </summary>
 public class SeerrClient : IDisposable
 {
+    // One process-wide client: a client per instance opened a fresh connection pool every
+    // sync and every dashboard check. The API key is per configuration, so it goes on each
+    // request rather than on the shared client's default headers.
+    private static readonly HttpClient SharedHttp = WithDefaultHeaders(new HttpClient(new SocketsHttpHandler
+    {
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+        // Shared by every Seerr configuration: a cookie one response set must never ride on
+        // another's request.
+        UseCookies = false,
+    }));
+
     private readonly HttpClient _http;
+    private readonly bool _ownsHttp;
     private readonly ILogger _logger;
     private readonly string _baseUrl;
+    private readonly string _apiKey;
 
     private readonly bool _autoApprove;
 
@@ -30,9 +43,35 @@ public class SeerrClient : IDisposable
         _baseUrl = baseUrl.TrimEnd('/');
         _logger = logger;
         _autoApprove = autoApprove;
-        _http = handler != null ? new HttpClient(handler) : new HttpClient();
-        _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        _http.DefaultRequestHeaders.TryAddWithoutValidation("X-Api-Key", apiKey);
+        _apiKey = apiKey;
+        _ownsHttp = handler != null;
+        _http = handler != null ? WithDefaultHeaders(new HttpClient(handler)) : SharedHttp;
+    }
+
+    internal HttpClient HttpForTesting => _http;
+
+    private static HttpClient WithDefaultHeaders(HttpClient http)
+    {
+        http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        return http;
+    }
+
+    private async Task<HttpResponseMessage> GetAsync(string url)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        return await SendAsync(request).ConfigureAwait(false);
+    }
+
+    private async Task<HttpResponseMessage> PostAsync(string url, HttpContent content)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = content };
+        return await SendAsync(request).ConfigureAwait(false);
+    }
+
+    private Task<HttpResponseMessage> SendAsync(HttpRequestMessage request)
+    {
+        request.Headers.TryAddWithoutValidation("X-Api-Key", _apiKey);
+        return _http.SendAsync(request);
     }
 
     /// <summary>Returns true if the client looks usable (URL + key set).</summary>
@@ -61,7 +100,7 @@ public class SeerrClient : IDisposable
         while (true)
         {
             var url = $"{_baseUrl}/api/v1/user?take={take}&skip={skip}";
-            using var response = await _http.GetAsync(url).ConfigureAwait(false);
+            using var response = await GetAsync(url).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
             var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
             using var doc = JsonDocument.Parse(json);
@@ -116,7 +155,7 @@ public class SeerrClient : IDisposable
         var url = $"{_baseUrl}/api/v1/movie/{tmdbId}";
         try
         {
-            using var response = await _http.GetAsync(url).ConfigureAwait(false);
+            using var response = await GetAsync(url).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogDebug("Seerr movie lookup non-success for TMDb {TmdbId}: {Status}",
@@ -177,7 +216,7 @@ public class SeerrClient : IDisposable
         var url = $"{_baseUrl}/api/v1/tv/{tmdbId}";
         try
         {
-            using var response = await _http.GetAsync(url).ConfigureAwait(false);
+            using var response = await GetAsync(url).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogDebug("Seerr TV lookup non-success for TMDb {TmdbId}: {Status}",
@@ -261,11 +300,8 @@ public class SeerrClient : IDisposable
             }
         }
 
-        var url = $"{_baseUrl}/api/v1/request";
-        var body = $"{{\"mediaType\":\"movie\",\"mediaId\":{tmdbId},\"userId\":{jellyseerrUserId}}}";
-        using var content = new StringContent(body, Encoding.UTF8, "application/json");
-
-        using var response = await _http.PostAsync(url, content).ConfigureAwait(false);
+        var body = $"{{\"mediaType\":\"movie\",\"mediaId\":{tmdbId}}}";
+        using var response = await PostRequestAsUserAsync(body, jellyseerrUserId).ConfigureAwait(false);
         var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
         if (response.IsSuccessStatusCode)
@@ -304,12 +340,9 @@ public class SeerrClient : IDisposable
         // to piggyback on, so this is one dedicated GET.
         var title = await GetSeriesInfoAsync(tmdbId).ConfigureAwait(false);
 
-        var url = $"{_baseUrl}/api/v1/request";
         var seasonsJson = seasonNumbers.Count > 0 ? "[" + string.Join(",", seasonNumbers) + "]" : "\"all\"";
-        var body = $"{{\"mediaType\":\"tv\",\"mediaId\":{tmdbId},\"userId\":{jellyseerrUserId},\"seasons\":{seasonsJson}}}";
-        using var content = new StringContent(body, Encoding.UTF8, "application/json");
-
-        using var response = await _http.PostAsync(url, content).ConfigureAwait(false);
+        var body = $"{{\"mediaType\":\"tv\",\"mediaId\":{tmdbId},\"seasons\":{seasonsJson}}}";
+        using var response = await PostRequestAsUserAsync(body, jellyseerrUserId).ConfigureAwait(false);
         var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
         var seasonsLabel = seasonNumbers.Count > 0 ? string.Join(",", seasonNumbers) : "all";
 
@@ -343,6 +376,25 @@ public class SeerrClient : IDisposable
         _logger.LogWarning("Seerr TV request failed for TMDb {TmdbId} S[{Seasons}] (user {UserId}): {Status} {Body}",
             tmdbId, seasonsLabel, jellyseerrUserId, (int)response.StatusCode, Truncate(responseBody, 200));
         return (RequestResult.Failed, title);
+    }
+
+    /// <summary>
+    /// POST /api/v1/request acting as the Seerr user the request is for, via X-API-User. Seerr
+    /// (server/middleware/auth.ts) treats an API-key call without that header as user 1, the
+    /// owner admin, and server/entity/MediaRequest.ts decides PENDING vs APPROVED from the
+    /// permissions of that acting user, not of the user the request is attributed to. Without the
+    /// header every request was approved as the admin. With it, Seerr approves on creation only
+    /// when the requester holds Auto-Approve themselves. The body carries no userId: Seerr rejects
+    /// a userId from a caller without Manage Users and Manage Requests, and with the header the
+    /// acting user already is the requester.
+    /// </summary>
+    private async Task<HttpResponseMessage> PostRequestAsUserAsync(string body, int jellyseerrUserId)
+    {
+        using var content = new StringContent(body, Encoding.UTF8, "application/json");
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}/api/v1/request") { Content = content };
+        request.Headers.TryAddWithoutValidation("X-API-User",
+            jellyseerrUserId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return await SendAsync(request).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -414,7 +466,7 @@ public class SeerrClient : IDisposable
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.TryAddWithoutValidation("X-API-User",
                 jellyseerrUserId.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            using var response = await _http.SendAsync(request).ConfigureAwait(false);
+            using var response = await SendAsync(request).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 var errBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
@@ -481,7 +533,7 @@ public class SeerrClient : IDisposable
         using var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = content };
         request.Headers.TryAddWithoutValidation("X-API-User", jellyseerrUserId.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
-        using var response = await _http.SendAsync(request).ConfigureAwait(false);
+        using var response = await SendAsync(request).ConfigureAwait(false);
         if (response.IsSuccessStatusCode)
             return true;
 
@@ -506,7 +558,7 @@ public class SeerrClient : IDisposable
         using var request = new HttpRequestMessage(HttpMethod.Delete, url);
         request.Headers.TryAddWithoutValidation("X-API-User", jellyseerrUserId.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
-        using var response = await _http.SendAsync(request).ConfigureAwait(false);
+        using var response = await SendAsync(request).ConfigureAwait(false);
         if (response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.NotFound)
             return true;
 
@@ -533,16 +585,16 @@ public class SeerrClient : IDisposable
     /// Makes sure a request we just created will actually be handed to Radarr/Sonarr.
     /// <para>
     /// A 2xx from POST /api/v1/request only means Seerr stored the request. Seerr calls
-    /// sendToRadarr/sendToSonarr only once a request is APPROVED, and it decides auto-approval
-    /// from the permissions of the user the request is attributed to, <em>not</em> from the API
-    /// key that created it. So a request attributed to a Seerr user without "Auto-Approve" is
-    /// created PENDING and sits there forever, which is exactly issue #110: the requests appear
-    /// in Seerr but never reach Radarr.
+    /// sendToRadarr/sendToSonarr only once a request is APPROVED, and it approves on creation
+    /// only when the acting user holds Auto-Approve or Manage Requests. Requests are created as
+    /// the requester (see <see cref="PostRequestAsUserAsync"/>), so one for a Seerr user without
+    /// Auto-Approve comes back PENDING and would sit there, the symptom of issue #110.
     /// </para>
     /// <para>
-    /// When auto-approve is on we follow up with POST /api/v1/request/{id}/approve, which the
-    /// admin API key is permitted to do. When it's off we leave the request in the moderation
-    /// queue and say so plainly, so the symptom is diagnosable from the log alone.
+    /// When the admin's auto-approve switch is on we follow up with
+    /// POST /api/v1/request/{id}/approve using the admin API key (no X-API-User, so Seerr acts as
+    /// the owner admin, who holds Manage Requests). When it's off we leave the request in the
+    /// moderation queue and say so plainly, so the symptom is diagnosable from the log alone.
     /// </para>
     /// </summary>
     private async Task EnsureApprovedAsync(string responseBody, int tmdbId, int jellyseerrUserId,
@@ -555,7 +607,7 @@ public class SeerrClient : IDisposable
         {
             _logger.LogWarning(
                 "Seerr {MediaType} request {RequestId} for TMDb {TmdbId} (user {UserId}) was created PENDING and "
-                + "will not reach {Arr} until it is approved. The Seerr user it is attributed to lacks Auto-Approve; "
+                + "will not reach {Arr} until it is approved. That Seerr user lacks Auto-Approve; "
                 + "approve it in Seerr, grant that user Auto-Approve, or enable auto-approve in Jellyscribe.",
                 mediaType, requestId, tmdbId, jellyseerrUserId, arrName);
             return;
@@ -576,7 +628,7 @@ public class SeerrClient : IDisposable
         try
         {
             using var content = new StringContent("{}", Encoding.UTF8, "application/json");
-            using var response = await _http.PostAsync(url, content).ConfigureAwait(false);
+            using var response = await PostAsync(url, content).ConfigureAwait(false);
             if (response.IsSuccessStatusCode)
             {
                 _logger.LogInformation(
@@ -644,7 +696,7 @@ public class SeerrClient : IDisposable
             (int RawCount, List<(int RequestId, int TmdbId)> Matches) page;
             try
             {
-                using var response = await _http.GetAsync(url).ConfigureAwait(false);
+                using var response = await GetAsync(url).ConfigureAwait(false);
                 if (!response.IsSuccessStatusCode)
                 {
                     _logger.LogWarning("Seerr pending-request lookup failed ({Status}); skipping backlog reconcile.",
@@ -769,5 +821,9 @@ public class SeerrClient : IDisposable
 
     private static string Truncate(string s, int max) => s.Length > max ? s.Substring(0, max) + "..." : s;
 
-    public void Dispose() => _http.Dispose();
+    public void Dispose()
+    {
+        if (_ownsHttp)
+            _http.Dispose();
+    }
 }

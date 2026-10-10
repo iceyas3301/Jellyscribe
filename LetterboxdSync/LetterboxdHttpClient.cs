@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 
@@ -27,7 +28,7 @@ public class LetterboxdHttpClient : IDisposable
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:134.0) Gecko/20100101 Firefox/134.0";
 
     private readonly ILogger _logger;
-    internal readonly CookieContainer CookieContainer = new();
+    internal readonly CookieContainer CookieContainer;
     private readonly HttpClientHandler _handler;
     internal readonly HttpClient Http;
     internal string Csrf = string.Empty;
@@ -37,9 +38,11 @@ public class LetterboxdHttpClient : IDisposable
     {
     }
 
-    internal LetterboxdHttpClient(ILogger logger, HttpMessageHandler? handler, string? userAgent = null)
+    internal LetterboxdHttpClient(ILogger logger, HttpMessageHandler? handler, string? userAgent = null,
+        CookieContainer? cookies = null)
     {
         _logger = logger;
+        CookieContainer = cookies ?? new CookieContainer();
         _handler = handler as HttpClientHandler ?? new HttpClientHandler
         {
             CookieContainer = CookieContainer,
@@ -168,20 +171,22 @@ public class LetterboxdHttpClient : IDisposable
     /// Retry an HTTP GET with Cloudflare 403 backoff.
     /// </summary>
     internal async Task<HttpResponseMessage> GetWithCloudflareRetryAsync(
-        string path, string site = "same-origin", string? referrer = null, int maxRetries = 3)
+        string path, string site = "same-origin", string? referrer = null, int maxRetries = 3,
+        CancellationToken cancellationToken = default)
     {
         for (int attempt = 0; ; attempt++)
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, path);
             SetNavHeaders(req.Headers, site, referrer);
-            var res = await Http.SendAsync(req).ConfigureAwait(false);
+            var res = await Http.SendAsync(req, cancellationToken).ConfigureAwait(false);
 
             if (res.StatusCode == HttpStatusCode.Forbidden && attempt < maxRetries - 1)
             {
                 var backoff = (attempt + 1) * 15000 + Random.Shared.Next(10000);
                 _logger.LogWarning("GET {Path} got 403 (Cloudflare). Backing off {Delay}ms (attempt {Attempt}/{Max})",
                     path, backoff, attempt + 1, maxRetries);
-                await Task.Delay(backoff).ConfigureAwait(false);
+                res.Dispose();
+                await Task.Delay(backoff, cancellationToken).ConfigureAwait(false);
                 continue;
             }
 

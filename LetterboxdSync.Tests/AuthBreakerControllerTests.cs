@@ -60,23 +60,6 @@ public class AuthBreakerControllerTests : IDisposable
     }
 
     [Fact]
-    public void PutAccount_CredentialSave_ClosesOpenBreaker()
-    {
-        using var h = new ControllerTestHarness(UserId);
-        OpenBreaker(UserId, "kostadamus");
-
-        var result = h.Controller.PutAccount(new AccountUpdateRequest
-        {
-            LetterboxdUsername = "kostadamus",
-            LetterboxdPassword = "new-password",
-            Enabled = true
-        });
-
-        Assert.IsType<OkObjectResult>(result);
-        Assert.False(AuthBreaker.IsOpen(UserId, "kostadamus"));
-    }
-
-    [Fact]
     public void PutAccounts_LeavesOtherUsersBreakersAlone()
     {
         using var h = new ControllerTestHarness(UserId);
@@ -188,6 +171,23 @@ public class AuthBreakerControllerTests : IDisposable
         SaveAsDashboard(Acct(UserId, "charlie", "new-password"));
 
         Assert.False(AuthBreaker.IsOpen(UserId, "charlie"));
+    }
+
+    /// <summary>
+    /// The dashboard never gets the stored password back, so a save that only changes another
+    /// setting posts it blank. The kept password is the same password: the breaker stays open.
+    /// </summary>
+    [Fact]
+    public void UpdateConfiguration_PasswordLeftBlank_KeepsBreakerOpen()
+    {
+        using var h = new ControllerTestHarness(UserId);
+        SaveAsDashboard(Acct(UserId, "charlie", "old-password"));
+        OpenBreaker(UserId, "charlie");
+
+        SaveAsDashboard(Acct(UserId, "charlie", string.Empty));
+
+        Assert.True(AuthBreaker.IsOpen(UserId, "charlie"));
+        Assert.Equal("old-password", h.Config.Accounts.Single().LetterboxdPassword);
     }
 
     /// <summary>

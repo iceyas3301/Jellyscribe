@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using LetterboxdSync;
 using LetterboxdSync.Api;
@@ -273,10 +274,10 @@ public class EnhancedReviewControllerTests : IDisposable
         public Task AuthenticateAsync(string username, string password, string? rawCookies = null)
             => Task.CompletedTask;
 
-        public Task<FilmResult> LookupFilmByTmdbIdAsync(int tmdbId)
+        public Task<FilmResult> LookupFilmByTmdbIdAsync(int tmdbId, CancellationToken cancellationToken = default)
             => Task.FromResult(new FilmResult($"film-{tmdbId}", $"filmId-{tmdbId}", null));
 
-        public Task<DiaryInfo> GetDiaryInfoAsync(string filmIdOrSlug, string username)
+        public Task<DiaryInfo> GetDiaryInfoAsync(string filmIdOrSlug, string username, CancellationToken cancellationToken = default)
             => Task.FromResult(new DiaryInfo(null, false));
 
         public bool SupportsLogEntryEditing => true;
@@ -287,24 +288,24 @@ public class EnhancedReviewControllerTests : IDisposable
         public Task UpdateLogEntryAsync(string logEntryId, string? reviewText, bool containsSpoilers, double? rating)
             => Task.CompletedTask;
 
-        public Task SetFilmRatingAsync(string filmSlug, string filmId, double rating)
+        public Task SetFilmRatingAsync(string filmSlug, string filmId, double rating, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
         public Task MarkAsWatchedAsync(string filmSlug, string filmId, DateTime? date, bool liked,
-            string? productionId = null, bool rewatch = false, double? rating = null)
+            string? productionId = null, bool rewatch = false, double? rating = null, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
         public Task PostReviewAsync(string filmSlug, string? reviewText, bool containsSpoilers = false,
             bool isRewatch = false, string? date = null, double? rating = null, int? tmdbId = null)
             => Task.CompletedTask;
 
-        public Task<System.Collections.Generic.List<int>> GetWatchlistTmdbIdsAsync(string username)
+        public Task<System.Collections.Generic.List<int>> GetWatchlistTmdbIdsAsync(string username, CancellationToken cancellationToken = default)
             => Task.FromResult(new System.Collections.Generic.List<int>());
 
         public Task<System.Collections.Generic.List<int>> GetDiaryTmdbIdsAsync(string username)
             => Task.FromResult(new System.Collections.Generic.List<int>());
 
-        public Task<System.Collections.Generic.List<DiaryFilmEntry>> GetDiaryFilmEntriesAsync(string username)
+        public Task<System.Collections.Generic.List<DiaryFilmEntry>> GetDiaryFilmEntriesAsync(string username, CancellationToken cancellationToken = default)
             => Task.FromResult(new System.Collections.Generic.List<DiaryFilmEntry>());
 
         public void Dispose() { }

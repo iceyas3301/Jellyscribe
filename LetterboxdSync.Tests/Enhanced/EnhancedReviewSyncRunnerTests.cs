@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using LetterboxdSync;
 using LetterboxdSync.Configuration;
@@ -651,14 +652,14 @@ public class EnhancedReviewSyncRunnerTests : IDisposable
         public Task AuthenticateAsync(string username, string password, string? rawCookies = null)
             => Task.CompletedTask;
 
-        public Task<FilmResult> LookupFilmByTmdbIdAsync(int tmdbId)
+        public Task<FilmResult> LookupFilmByTmdbIdAsync(int tmdbId, CancellationToken cancellationToken = default)
             => Task.FromResult(new FilmResult($"film-{tmdbId}", $"filmId-{tmdbId}", null));
 
-        public Task<DiaryInfo> GetDiaryInfoAsync(string filmIdOrSlug, string username)
+        public Task<DiaryInfo> GetDiaryInfoAsync(string filmIdOrSlug, string username, CancellationToken cancellationToken = default)
             => Task.FromResult(DiaryInfoResult);
 
         public Task MarkAsWatchedAsync(string filmSlug, string filmId, DateTime? date, bool liked,
-            string? productionId = null, bool rewatch = false, double? rating = null)
+            string? productionId = null, bool rewatch = false, double? rating = null, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
         public Task PostReviewAsync(string filmSlug, string? reviewText, bool containsSpoilers = false,
@@ -677,7 +678,7 @@ public class EnhancedReviewSyncRunnerTests : IDisposable
         public Task<string?> FindLogEntryIdAsync(string filmIdOrSlug, DateTime date)
             => Task.FromResult(ExistingEntries.TryGetValue(date.Date, out var id) ? id : null);
 
-        public Task SetFilmRatingAsync(string filmSlug, string filmId, double rating)
+        public Task SetFilmRatingAsync(string filmSlug, string filmId, double rating, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
         public Task UpdateLogEntryAsync(string logEntryId, string? reviewText, bool containsSpoilers, double? rating)
@@ -686,13 +687,13 @@ public class EnhancedReviewSyncRunnerTests : IDisposable
             return Task.CompletedTask;
         }
 
-        public Task<List<int>> GetWatchlistTmdbIdsAsync(string username)
+        public Task<List<int>> GetWatchlistTmdbIdsAsync(string username, CancellationToken cancellationToken = default)
             => Task.FromResult(new List<int>());
 
         public Task<List<int>> GetDiaryTmdbIdsAsync(string username)
             => Task.FromResult(new List<int>());
 
-        public Task<List<DiaryFilmEntry>> GetDiaryFilmEntriesAsync(string username)
+        public Task<List<DiaryFilmEntry>> GetDiaryFilmEntriesAsync(string username, CancellationToken cancellationToken = default)
             => Task.FromResult(new List<DiaryFilmEntry>());
 
         public void Dispose() { }
@@ -704,23 +705,26 @@ public class EnhancedReviewSyncRunnerTests : IDisposable
         public List<PostedEpisodeReview> EpisodeReviews { get; } = new();
         public Exception? PostException { get; set; }
 
-        public Task<int?> ResolveSeasonIdAsync(int showTmdbId, int seasonNumber)
+        public Task<int?> ResolveSeasonIdAsync(int showTmdbId, int seasonNumber, CancellationToken cancellationToken = default)
             => Task.FromResult<int?>(1);
 
-        public Task LogEpisodesAsync(int showTmdbId, int seasonId, IReadOnlyList<int> episodeNumbers)
+        public Task<int?> GetSeasonEpisodeCountAsync(int showTmdbId, int seasonNumber, CancellationToken cancellationToken = default)
+            => Task.FromResult<int?>(null);
+
+        public Task LogEpisodesAsync(int showTmdbId, int seasonId, IReadOnlyList<int> episodeNumbers, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
         public Task CreateEpisodeLogAsync(int showTmdbId, int seasonId, int episodeNumber,
-            DateTime watchedAtUtc, int? rating, bool isRewatch)
+            DateTime watchedAtUtc, int? rating, bool isRewatch, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
         public Task UnlogEpisodesAsync(int showTmdbId, int seasonId, IReadOnlyList<int> episodeNumbers)
             => Task.CompletedTask;
 
-        public Task SetShowMetaAsync(int showTmdbId, int? rating, bool like)
+        public Task SetShowMetaAsync(int showTmdbId, int? rating, bool like, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
-        public Task<System.Collections.Generic.List<SerializdWatchlistEntry>> GetWatchlistAsync()
+        public Task<System.Collections.Generic.List<SerializdWatchlistEntry>> GetWatchlistAsync(CancellationToken cancellationToken = default)
             => Task.FromResult(new System.Collections.Generic.List<SerializdWatchlistEntry>());
 
         public Task CreateShowReviewAsync(int showTmdbId, int? rating, string? reviewText, bool containsSpoiler)
@@ -739,7 +743,7 @@ public class EnhancedReviewSyncRunnerTests : IDisposable
             return Task.CompletedTask;
         }
 
-        public Task<System.Collections.Generic.List<SerializdDiaryEpisode>> GetDiaryEpisodesAsync()
+        public Task<System.Collections.Generic.List<SerializdDiaryEpisode>> GetDiaryEpisodesAsync(CancellationToken cancellationToken = default)
             => Task.FromResult(new System.Collections.Generic.List<SerializdDiaryEpisode>());
 
         public void Dispose() { }

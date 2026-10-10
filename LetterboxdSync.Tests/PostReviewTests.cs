@@ -258,6 +258,78 @@ public class PostReviewTests
         Assert.Contains($"\"diaryDate\":\"{today}\"", capturedBody!);
     }
 
+    private static ReviewMockHandler EchoingReviewEndpoint(HttpStatusCode status, string body)
+    {
+        var handler = new ReviewMockHandler();
+        handler.Responder = (request, _) =>
+        {
+            var path = request.RequestUri?.AbsolutePath ?? "";
+            if (request.Method == HttpMethod.Get && path == "/")
+                return CsrfRootResponse(handler);
+            if (request.Method == HttpMethod.Get && path == "/film/sinners/")
+                return FilmPageResponse();
+            if (request.Method == HttpMethod.Post && path.EndsWith("/api/v0/production-log-entries"))
+                return new HttpResponseMessage(status) { Content = new StringContent(body) };
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        };
+        return handler;
+    }
+
+    [Fact]
+    public async Task PostReviewAsync_Success_LogsStatusAndLength_NeverTheReplyBody()
+    {
+        // Letterboxd's reply to a new log entry can echo the review back.
+        const string review = "a private first draft about the ending";
+        var reply = "{\"id\":\"abc\",\"review\":{\"text\":\"" + review + "\"}}";
+        var logger = new ListLogger();
+
+        await EchoingReviewEndpoint(HttpStatusCode.OK, reply).CreateDiary(logger).PostReviewAsync("sinners", review, date: null);
+
+        Assert.DoesNotContain(logger.Entries, e => e.Message.Contains("private first draft"));
+        Assert.Contains(logger.Entries, e => e.Level == LogLevel.Information
+            && e.Message.Contains("Posted review for sinners") && e.Message.Contains("status=200")
+            && e.Message.Contains($"bodyLen={reply.Length}"));
+    }
+
+    [Fact]
+    public async Task PostReviewAsync_Failure_LogsAShortStartOfTheReply()
+    {
+        var reply = "{\"error\":\"invalid rating\"}" + new string('x', 1000);
+        var logger = new ListLogger();
+
+        await Assert.ThrowsAnyAsync<Exception>(() =>
+            EchoingReviewEndpoint(HttpStatusCode.BadRequest, reply).CreateDiary(logger).PostReviewAsync("sinners", "a fine film", date: null));
+
+        var entry = Assert.Single(logger.Entries, e => e.Message.Contains("Review post for sinners failed"));
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        Assert.Contains("status=400", entry.Message);
+        Assert.Contains("invalid rating", entry.Message);
+        Assert.DoesNotContain(new string('x', 400), entry.Message);
+    }
+
+    [Theory]
+    [InlineData("{\"error\":\"invalid rating\"}", "ok", "{\"error\":\"invalid rating\"}")]
+    [InlineData("{\"error\":\"quoted: an honest review\"}", "an honest review", "{\"error\":\"quoted: [review]\"}")]
+    [InlineData("{\"text\":\"caf\\u00E9 noir\"}", "café noir", "{\"text\":\"[review]\"}")]
+    [InlineData("plain café noir", "café noir", "plain [review]")]
+    public void WithoutReview_CutsTheReview_ButLeavesAShortOneAlone(string body, string review, string expected)
+        => Assert.Equal(expected, LetterboxdDiary.WithoutReview(body, review));
+
+    [Fact]
+    public async Task PostReviewAsync_FailureThatQuotesTheReview_KeepsTheReviewOutOfTheLogAndTheError()
+    {
+        const string review = "my \"secret\" draft\nsecond line";
+        var reply = "{\"error\":\"review too long\",\"review\":{\"text\":" + System.Text.Json.JsonSerializer.Serialize(review) + "}}";
+        var logger = new ListLogger();
+
+        var ex = await Assert.ThrowsAnyAsync<Exception>(() =>
+            EchoingReviewEndpoint(HttpStatusCode.BadRequest, reply).CreateDiary(logger).PostReviewAsync("sinners", review, date: null));
+
+        Assert.DoesNotContain(logger.Entries, e => e.Message.Contains("secret"));
+        Assert.DoesNotContain("secret", ex.Message);
+        Assert.Contains(logger.Entries, e => e.Message.Contains("review too long") && e.Message.Contains("[review]"));
+    }
+
     /// <summary>
     /// Self-contained mock handler that wires up an HttpClient + LetterboxdHttpClient
     /// + LetterboxdDiary chain. The Responder captures requests and produces responses;

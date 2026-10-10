@@ -51,34 +51,50 @@ public class SerializdDiaryImportRunner
 
     public async Task RunForAllAsync(IProgress<double> progress, CancellationToken cancellationToken)
     {
-        var pairs = _userManager.GetUsers()
-            .SelectMany(u => Config.GetEnabledSerializdAccountsForUser(u.Id.ToString("N"))
-                .Where(a => a.EnableDiaryImport)
-                .Select(a => (User: u, Account: a)))
-            .ToList();
-
-        var processed = 0;
-        foreach (var (user, account) in pairs)
+        // Shares the export runner's gate so an import never logs in to Serializd while a
+        // catch-up is mid-run against the same accounts. It waits rather than skips, so a long
+        // catch-up never costs the night's import.
+        if (!await SerializdSyncGate.Instance.WaitAsync(0, cancellationToken).ConfigureAwait(false))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                await ImportOneAsync(user, account, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError("Serializd diary import failed for {Username} as {Email}: {Message}",
-                    user.Username, account.Email, ex.Message);
-                // No SyncEvent is recorded on this path; hook telemetry directly.
-                TelemetryService.RecordError(TelemetryService.Classify(ex.Message));
-            }
-
-            processed++;
-            if (pairs.Count > 0)
-                progress.Report((double)processed / pairs.Count * 100);
+            _logger.LogInformation("A Serializd sync is running; the diary import starts when it finishes");
+            await SerializdSyncGate.Instance.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        progress.Report(100);
+        try
+        {
+            var pairs = _userManager.GetUsers()
+                .SelectMany(u => Config.GetEnabledSerializdAccountsForUser(u.Id.ToString("N"))
+                    .Where(a => a.EnableDiaryImport)
+                    .Select(a => (User: u, Account: a)))
+                .ToList();
+
+            var processed = 0;
+            foreach (var (user, account) in pairs)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    await ImportOneAsync(user, account, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+                {
+                    _logger.LogError("Serializd diary import failed for {Username} as {Account}: {Message}",
+                        user.Username, LogRedaction.AccountTag(account.Email), ex.Message);
+                    // No SyncEvent is recorded on this path; hook telemetry directly.
+                    TelemetryService.RecordError(TelemetryService.Classify(ex.Message));
+                }
+
+                processed++;
+                if (pairs.Count > 0)
+                    progress.Report((double)processed / pairs.Count * 100);
+            }
+
+            progress.Report(100);
+        }
+        finally
+        {
+            SerializdSyncGate.Instance.Release();
+        }
     }
 
     private async Task ImportOneAsync(User user, SerializdAccount account, CancellationToken cancellationToken)
@@ -87,7 +103,7 @@ public class SerializdDiaryImportRunner
         using (var service = await SerializdServiceFactory
                    .CreateAuthenticatedAsync(account.Email, account.Password, _logger).ConfigureAwait(false))
         {
-            diary = await service.GetDiaryEpisodesAsync().ConfigureAwait(false);
+            diary = await service.GetDiaryEpisodesAsync(cancellationToken).ConfigureAwait(false);
         }
 
         if (diary.Count == 0) return;
@@ -127,7 +143,7 @@ public class SerializdDiaryImportRunner
         }
 
         if (marked > 0)
-            _logger.LogInformation("Serializd diary import: marked {Count} episodes played for {Username} as {Email}",
-                marked, user.Username, account.Email);
+            _logger.LogInformation("Serializd diary import: marked {Count} episodes played for {Username} as {Account}",
+                marked, user.Username, LogRedaction.AccountTag(account.Email));
     }
 }

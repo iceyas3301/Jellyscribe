@@ -96,6 +96,23 @@ public class WatchlistSyncRunnerTests : IDisposable
         });
     }
 
+    [Fact]
+    public async Task PartialWatchlistRead_LeavesThePlaylistUntouched()
+    {
+        var (user, userId) = MakeUser("lachlan");
+        _userManager.GetUsers().Returns(new[] { user });
+        AddAccount(userId);
+        _libraryManager.GetItemList(Arg.Any<InternalItemsQuery>()).Returns(new List<BaseItem> { MakeMovie(1233413) });
+        var service = Substitute.For<ILetterboxdService>();
+        service.GetWatchlistTmdbIdsAsync(Arg.Any<string>()).Returns(Task.FromException<List<int>>(
+            new InvalidOperationException("Could not read the whole Letterboxd watchlist for lb-user: after 28 films Letterboxd returned status 429 on page 2. Nothing was changed this run.")));
+        LetterboxdServiceFactory.OverrideForTesting = (_, _, _, _, _) => Task.FromResult(service);
+
+        await _runner.TryRunForUserAsync(userId, "manual", new Progress<double>(), CancellationToken.None);
+
+        Assert.Empty(_playlistManager.ReceivedCalls());
+    }
+
     // ----- Pre-flight gates -----
 
     [Fact]
@@ -188,6 +205,49 @@ public class WatchlistSyncRunnerTests : IDisposable
         // fetch will fail. So we don't assert on it here; the fact that no playlist was
         // created is the meaningful behavioural assertion.
         await _playlistManager.DidNotReceive().CreatePlaylist(Arg.Any<PlaylistCreationRequest>());
+    }
+
+    [Fact]
+    public async Task TryRunForUserAsync_ProgressPhases_NeverNameTheUser()
+    {
+        // GET /Progress is one process-wide snapshot that every signed-in user can read, so
+        // the phase text must not say whose sync is running.
+        var (user, userId) = MakeUser("phase-privacy-user");
+        _userManager.GetUsers().Returns(new[] { user });
+        AddAccount(userId);
+
+        var phases = new List<string>();
+        void Capture()
+        {
+            var snapshot = SyncProgress.GetSnapshot();
+            phases.Add((string)snapshot.GetType().GetProperty("phase")!.GetValue(snapshot)!);
+        }
+
+        var service = Substitute.For<ILetterboxdService>();
+        service.GetWatchlistTmdbIdsAsync(Arg.Any<string>()).Returns(_ =>
+        {
+            Capture();
+            return Task.FromResult(new List<int> { 1233413 });
+        });
+        LetterboxdServiceFactory.OverrideForTesting = (_, _, _, _, _) =>
+        {
+            Capture();
+            return Task.FromResult(service);
+        };
+        _libraryManager.GetItemList(Arg.Any<InternalItemsQuery>()).Returns(_ =>
+        {
+            Capture();
+            return new List<BaseItem>();
+        });
+
+        await _runner.TryRunForUserAsync(userId, "test", new Progress<double>(), CancellationToken.None);
+
+        Assert.NotEmpty(phases);
+        Assert.All(phases, p =>
+        {
+            Assert.DoesNotContain("phase-privacy-user", p, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("lb-user", p, StringComparison.OrdinalIgnoreCase);
+        });
     }
 
     [Fact]

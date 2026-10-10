@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -48,6 +49,14 @@ public class ScheduledTaskTests : IDisposable
         try { if (Directory.Exists(_tempDir)) Directory.Delete(_tempDir, true); } catch { }
     }
 
+    // Progress<T> posts to the sync context asynchronously; this records inline so
+    // the assertions see every report before ExecuteAsync returns.
+    private sealed class RecordingProgress : IProgress<double>
+    {
+        public List<double> Values { get; } = new();
+        public void Report(double value) => Values.Add(value);
+    }
+
     private LetterboxdSyncRunner MakeSyncRunner(IUserManager um, ILibraryManager lm, IUserDataManager udm)
         => new(NullLoggerFactory.Instance, lm, um, udm);
 
@@ -81,9 +90,9 @@ public class ScheduledTaskTests : IDisposable
 
         var triggers = task.GetDefaultTriggers().ToList();
 
-        Assert.Single(triggers);
-        Assert.Equal(TaskTriggerInfoType.IntervalTrigger, triggers[0].Type);
-        Assert.Equal(TimeSpan.FromDays(1).Ticks, triggers[0].IntervalTicks);
+        Assert.Equal(2, triggers.Count);
+        Assert.Equal(TaskTriggerInfoType.DailyTrigger, triggers[0].Type);
+        Assert.Equal(TaskTriggerInfoType.IntervalTrigger, triggers[1].Type);
     }
 
     [Fact]
@@ -97,8 +106,12 @@ public class ScheduledTaskTests : IDisposable
         var udm = Substitute.For<IUserDataManager>();
         var task = new SyncTask(MakeSyncRunner(um, lm, udm));
 
-        await task.ExecuteAsync(new Progress<double>(), CancellationToken.None);
-        // No exception = pass; runner exited cleanly with no users to process.
+        var progress = new RecordingProgress();
+        await task.ExecuteAsync(progress, CancellationToken.None);
+
+        // The task really ran the runner: it enumerated users and finished the run.
+        um.Received(1).GetUsers();
+        Assert.Equal(new[] { 100d }, progress.Values);
     }
 
     [Fact]
@@ -125,8 +138,9 @@ public class ScheduledTaskTests : IDisposable
 
         var triggers = task.GetDefaultTriggers().ToList();
 
-        Assert.Single(triggers);
-        Assert.Equal(TimeSpan.FromDays(1).Ticks, triggers[0].IntervalTicks);
+        Assert.Equal(2, triggers.Count);
+        Assert.Equal(TaskTriggerInfoType.DailyTrigger, triggers[0].Type);
+        Assert.Equal(TaskTriggerInfoType.IntervalTrigger, triggers[1].Type);
     }
 
     [Fact]
@@ -138,7 +152,11 @@ public class ScheduledTaskTests : IDisposable
         var pm = Substitute.For<IPlaylistManager>();
         var task = new WatchlistSyncTask(MakeWatchlistRunner(um, lm, pm));
 
-        await task.ExecuteAsync(new Progress<double>(), CancellationToken.None);
+        var progress = new RecordingProgress();
+        await task.ExecuteAsync(progress, CancellationToken.None);
+
+        um.Received(1).GetUsers();
+        Assert.Equal(new[] { 100d }, progress.Values);
     }
 
     [Fact]
@@ -165,9 +183,9 @@ public class ScheduledTaskTests : IDisposable
 
         var triggers = task.GetDefaultTriggers().ToList();
 
-        Assert.Single(triggers);
-        Assert.Equal(TaskTriggerInfoType.IntervalTrigger, triggers[0].Type);
-        Assert.Equal(TimeSpan.FromDays(1).Ticks, triggers[0].IntervalTicks);
+        Assert.Equal(2, triggers.Count);
+        Assert.Equal(TaskTriggerInfoType.DailyTrigger, triggers[0].Type);
+        Assert.Equal(TaskTriggerInfoType.IntervalTrigger, triggers[1].Type);
     }
 
     [Fact]
@@ -179,7 +197,49 @@ public class ScheduledTaskTests : IDisposable
         var udm = Substitute.For<IUserDataManager>();
         var task = new SerializdSyncTask(MakeSerializdSyncRunner(um, lm, udm));
 
-        await task.ExecuteAsync(new Progress<double>(), CancellationToken.None);
-        // No exception = pass; runner exited cleanly with no users to process.
+        var progress = new RecordingProgress();
+        await task.ExecuteAsync(progress, CancellationToken.None);
+
+        // The task really ran the runner: it enumerated users and finished the run.
+        um.Received(1).GetUsers();
+        Assert.Equal(new[] { 100d }, progress.Values);
+    }
+
+    // A DailyTrigger fires at a fixed time of day; an IntervalTrigger restarts its clock on
+    // every Jellyfin restart and fired all seven tasks together. Staggered so the Letterboxd
+    // and Serializd families don't hit their origins in the same minute.
+    [Fact]
+    public void AllSyncTasks_AreStaggeredDailyTriggers()
+    {
+        var um = Substitute.For<IUserManager>();
+        var lm = Substitute.For<ILibraryManager>();
+        var udm = Substitute.For<IUserDataManager>();
+        var pm = Substitute.For<IPlaylistManager>();
+        var cm = Substitute.For<MediaBrowser.Controller.Collections.ICollectionManager>();
+
+        var expected = new (IScheduledTask Task, TimeSpan TimeOfDay)[]
+        {
+            (new SyncTask(MakeSyncRunner(um, lm, udm)), new TimeSpan(3, 0, 0)),
+            (new WatchlistSyncTask(MakeWatchlistRunner(um, lm, pm)), new TimeSpan(3, 20, 0)),
+            (new DiaryImportTask(um, NullLoggerFactory.Instance, lm, udm), new TimeSpan(3, 40, 0)),
+            (new SerializdSyncTask(MakeSerializdSyncRunner(um, lm, udm)), new TimeSpan(4, 0, 0)),
+            (new SerializdWatchlistSyncTask(new SerializdWatchlistSyncRunner(NullLoggerFactory.Instance, lm, um, cm, pm)),
+                new TimeSpan(4, 20, 0)),
+            (new SerializdDiaryImportTask(new SerializdDiaryImportRunner(NullLoggerFactory.Instance, lm, um, udm)),
+                new TimeSpan(4, 40, 0)),
+            (new TelemetryTask(lm, Substitute.For<MediaBrowser.Controller.IServerApplicationHost>(), NullLoggerFactory.Instance), new TimeSpan(5, 0, 0)),
+        };
+
+        foreach (var (task, timeOfDay) in expected)
+        {
+            var triggers = task.GetDefaultTriggers().ToList();
+            Assert.Equal(2, triggers.Count);
+            Assert.Equal(TaskTriggerInfoType.DailyTrigger, triggers[0].Type);
+            Assert.Equal(timeOfDay.Ticks, triggers[0].TimeOfDayTicks);
+            // A machine that is off at that hour never fires the daily trigger; the interval
+            // trigger runs the task once it has gone two days without running.
+            Assert.Equal(TaskTriggerInfoType.IntervalTrigger, triggers[1].Type);
+            Assert.Equal(TimeSpan.FromDays(2).Ticks, triggers[1].IntervalTicks);
+        }
     }
 }

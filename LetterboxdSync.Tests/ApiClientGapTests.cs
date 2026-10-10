@@ -21,6 +21,8 @@ public class ApiClientGapTests
 {
     private static readonly ILogger TestLogger = NullLoggerFactory.Instance.CreateLogger("test");
 
+    public ApiClientGapTests() => LetterboxdApiClient.ResetFilmCacheForTesting(1091);
+
     [Fact]
     public async Task MarkAsWatchedAsync_NotAuthenticated_Throws()
     {
@@ -31,7 +33,7 @@ public class ApiClientGapTests
     }
 
     [Fact]
-    public async Task GetDiaryInfoAsync_NonSuccess_ReturnsEmpty()
+    public async Task GetDiaryInfoAsync_NonSuccess_ThrowsInsteadOfReportingNoEntries()
     {
         var handler = ApiTestHelpers.CreateAuthenticatedHandler(request =>
         {
@@ -43,10 +45,9 @@ public class ApiClientGapTests
 
         using var client = new LetterboxdApiClient(TestLogger, handler);
         await client.AuthenticateAsync("user", "pass");
-        var info = await client.GetDiaryInfoAsync("2a9q", "user");
-
-        Assert.False(info.HasAnyEntry);
-        Assert.Null(info.LastDate);
+        // A failed check is unknown, not "never logged": reading it as empty would post a
+        // duplicate of a film already on the diary.
+        await Assert.ThrowsAsync<DiaryCheckFailedException>(() => client.GetDiaryInfoAsync("2a9q", "user"));
     }
 
     [Fact]

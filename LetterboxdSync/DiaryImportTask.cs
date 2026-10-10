@@ -46,6 +46,27 @@ public class DiaryImportTask : IScheduledTask
 
     public async Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
     {
+        // The same gate as the diary and watchlist syncs: an import alongside them would log in
+        // and scrape Letterboxd from the same IP at once, and fight over the progress display.
+        // It waits rather than skips, so a long first sync never costs the night's import.
+        if (!await SyncGate.Instance.WaitAsync(0, cancellationToken).ConfigureAwait(false))
+        {
+            _logger.LogInformation("A Letterboxd sync is running; the diary import starts when it finishes");
+            await SyncGate.Instance.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+            await ImportAllAsync(progress, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            SyncGate.Instance.Release();
+        }
+    }
+
+    private async Task ImportAllAsync(IProgress<double> progress, CancellationToken cancellationToken)
+    {
         var users = _userManager.GetUsers().ToList();
         var usersWithImport = 0;
 
@@ -93,7 +114,7 @@ public class DiaryImportTask : IScheduledTask
             foreach (var account in accounts)
             {
                 var breakerUserId = user.Id.ToString("N");
-                if (AuthBreaker.IsOpen(breakerUserId, account.LetterboxdUsername))
+                if (AuthBreaker.BlocksLogin(breakerUserId, account.LetterboxdUsername))
                 {
                     _logger.LogInformation(
                         "Skipping diary import for {LbUser}: auth breaker open; re-save credentials to resume",
@@ -125,12 +146,12 @@ public class DiaryImportTask : IScheduledTask
                 List<DiaryFilmEntry> entries;
                 try
                 {
-                    SyncProgress.SetPhase(SyncProgress.TrackLetterboxd, $"Scanning Letterboxd films for {account.LetterboxdUsername}");
-                    entries = await service.GetDiaryFilmEntriesAsync(account.LetterboxdUsername).ConfigureAwait(false);
+                    SyncProgress.SetPhase(SyncProgress.TrackLetterboxd, "Scanning Letterboxd diary");
+                    entries = await service.GetDiaryFilmEntriesAsync(account.LetterboxdUsername, cancellationToken).ConfigureAwait(false);
                     _logger.LogInformation("Found {Count} films in {LbUser}'s Letterboxd diary",
                         entries.Count, account.LetterboxdUsername);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
                 {
                     _logger.LogError("Failed to fetch diary for {Username} as {LbUser}: {Message}",
                         user.Username, account.LetterboxdUsername, ex.Message);
@@ -269,12 +290,5 @@ public class DiaryImportTask : IScheduledTask
         progress.Report(100);
     }
 
-    public IEnumerable<TaskTriggerInfo> GetDefaultTriggers() => new[]
-    {
-        new TaskTriggerInfo
-        {
-            Type = TaskTriggerInfoType.IntervalTrigger,
-            IntervalTicks = TimeSpan.FromDays(1).Ticks
-        }
-    };
+    public IEnumerable<TaskTriggerInfo> GetDefaultTriggers() => TaskSchedule.Daily(TaskSchedule.LetterboxdDiaryImport);
 }

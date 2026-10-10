@@ -20,13 +20,15 @@ public static class SerializdActivity
 {
     private static readonly object _lock = new();
     private static List<SyncEvent>? _events;
+    private static List<string>? _unreadableLines;
+    private static bool _readFailed;
     private static ILogger? _logger;
 
     internal static string? DataPathOverride { get; set; }
 
     internal static void ResetForTesting()
     {
-        lock (_lock) { _events = null; }
+        lock (_lock) { _events = null; _unreadableLines = null; _readFailed = false; }
     }
 
     public static void SetLogger(ILogger logger) => _logger = logger;
@@ -52,6 +54,8 @@ public static class SerializdActivity
     {
         if (_events != null) return _events;
         _events = new List<SyncEvent>();
+        _unreadableLines = new List<string>();
+        _readFailed = false;
         try
         {
             if (File.Exists(DataPath))
@@ -59,29 +63,69 @@ public static class SerializdActivity
                 foreach (var line in File.ReadLines(DataPath))
                 {
                     if (string.IsNullOrWhiteSpace(line)) continue;
-                    try { var e = JsonSerializer.Deserialize<SyncEvent>(line); if (e != null) _events.Add(e); }
-                    catch { }
+                    SyncEvent? e = null;
+                    try { e = JsonSerializer.Deserialize<SyncEvent>(line); }
+                    catch (Exception) { /* kept verbatim below rather than lost */ }
+                    if (e != null) _events.Add(e);
+                    else _unreadableLines.Add(line);
                 }
             }
         }
         catch (Exception ex)
         {
-            _logger?.LogError(ex, "Failed to load Serializd activity from {Path}", DataPath);
+            _readFailed = true;
+            _logger?.LogError(ex, "Failed to load Serializd activity from {Path}; it will not be rewritten until it loads cleanly", DataPath);
+            return _events;
+        }
+
+        if (_unreadableLines.Count > 0)
+        {
+            // Never compact (and so rewrite) a file with lines this version cannot read.
+            _logger?.LogWarning("Skipped {Count} unreadable lines in Serializd activity {Path}; they are kept in the file", _unreadableLines.Count, DataPath);
+            return _events;
+        }
+
+        // Same cap as the Letterboxd history: a failing episode appends a row every run.
+        var dropped = SyncHistory.Compact(_events);
+        if (dropped > 0)
+        {
+            Save(_events);
+            _logger?.LogInformation("Compacted Serializd activity: dropped {Count} old skipped/failed events", dropped);
         }
 
         return _events;
     }
 
+    private static void Save(List<SyncEvent> events)
+    {
+        if (_readFailed)
+        {
+            _logger?.LogWarning("Not rewriting Serializd activity {Path}: it did not load cleanly", DataPath);
+            return;
+        }
+
+        try
+        {
+            JsonlFile.WriteAllLinesAtomic(DataPath,
+                events.Select(e => JsonSerializer.Serialize(e)).Concat(_unreadableLines ?? new List<string>()));
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "Failed to save Serializd activity to {Path}", DataPath);
+        }
+    }
+
     public static void Record(SyncEvent evt)
     {
+        if (string.IsNullOrEmpty(evt.UserId))
+            evt.UserId = SyncHistory.ResolveUserId(evt.Username);
+
         lock (_lock)
         {
             Load().Add(evt);
             try
             {
-                var dir = Path.GetDirectoryName(DataPath);
-                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                File.AppendAllText(DataPath, JsonSerializer.Serialize(evt) + Environment.NewLine);
+                JsonlFile.AppendLine(DataPath, JsonSerializer.Serialize(evt));
             }
             catch (Exception ex)
             {
@@ -94,13 +138,29 @@ public static class SerializdActivity
         TelemetryService.OnTvSyncEvent(evt);
     }
 
+    public static int StampMissingUserIds()
+    {
+        lock (_lock)
+        {
+            var events = Load();
+            var stamped = SyncHistory.StampMissingUserIds(events);
+            if (stamped == 0) return 0;
+            Save(events);
+            return stamped;
+        }
+    }
+
     public static (int Total, int Success, int Failed, int Skipped, int Rewatches) GetStats(string? username = null)
     {
         lock (_lock)
         {
             // Reviews show in the feed but aren't episode logs, so they don't count toward the stats.
             IEnumerable<SyncEvent> events = Load().Where(e => e.Source != "review");
-            if (!string.IsNullOrEmpty(username)) events = events.Where(e => e.Username == username);
+            if (!string.IsNullOrEmpty(username))
+            {
+                var userId = SyncHistory.ResolveUserId(username);
+                events = events.Where(e => SyncHistory.BelongsTo(e, username, userId));
+            }
             var list = events.ToList();
             return (
                 list.Count,

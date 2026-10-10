@@ -37,6 +37,17 @@ public class ServiceRegistratorTests
     }
 
     [Fact]
+    public void RegisterServices_AddsUserIdentityAsHostedService()
+    {
+        var services = new ServiceCollection();
+        var registrator = new ServiceRegistrator();
+
+        registrator.RegisterServices(services, null!);
+
+        Assert.Single(services, d => d.ServiceType == typeof(Microsoft.Extensions.Hosting.IHostedService) && d.ImplementationType == typeof(UserIdentityService));
+    }
+
+    [Fact]
     public void RegisterServices_AddsSyncRunnerAsSingleton()
     {
         var services = new ServiceCollection();

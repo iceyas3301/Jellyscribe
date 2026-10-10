@@ -8,7 +8,16 @@ public class AccountUpdateRequest
 
     public string LetterboxdPassword { get; set; } = string.Empty;
 
+    /// <summary>Empty keeps the stored cookies; <see cref="ClearRawCookies"/> drops them.</summary>
     public string? RawCookies { get; set; }
+
+    public bool ClearRawCookies { get; set; }
+
+    /// <summary>
+    /// The username this account had before the edit, when the user renamed it. The stored
+    /// password, cookies and other kept settings follow the rename. Empty means unchanged.
+    /// </summary>
+    public string? OriginalLetterboxdUsername { get; set; }
 
     public string? UserAgent { get; set; }
 
@@ -59,17 +68,6 @@ public class AccountUpdateRequest
 public class AccountsUpdateRequest
 {
     public List<AccountUpdateRequest> Accounts { get; set; } = new List<AccountUpdateRequest>();
-}
-
-public class TestConnectionRequest
-{
-    public string LetterboxdUsername { get; set; } = string.Empty;
-
-    public string LetterboxdPassword { get; set; } = string.Empty;
-
-    public string? RawCookies { get; set; }
-
-    public string? UserAgent { get; set; }
 }
 
 public class JellyseerrTestRequest

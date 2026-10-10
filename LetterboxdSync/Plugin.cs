@@ -41,6 +41,13 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     {
         if (configuration is PluginConfiguration cfg)
         {
+            // Secrets are write-only (never in the GET the dashboard round-trips), so the incoming
+            // config holds only the ones the admin just typed. Fill the rest from the stored config
+            // before anything compares or saves it, or every dashboard save would wipe them.
+            var stored = Configuration;
+            if (stored != null && !ReferenceEquals(stored, cfg))
+                cfg.KeepSecretsFrom(stored);
+
             // Close auth breakers for accounts whose credentials just changed. The admin
             // dashboard saves through this method rather than the user-facing /Accounts
             // endpoint, and only that endpoint reset breakers, so an admin who fixed a stale
@@ -56,7 +63,7 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
             cfg.NormalisePrimaryFlags();
 
             // Telemetry identity is generated server-side at the moment of opt-in, so
-            // every UI path (banner, checkbox, raw API) gets the same guarantee: random
+            // every UI path (Overview notice, checkbox, raw API) gets the same guarantee: random
             // UUID, never derived from anything, plus a per-instance jitter slot.
             cfg.Telemetry ??= new TelemetryData();
             if (cfg.Telemetry.Enabled && string.IsNullOrEmpty(cfg.Telemetry.InstanceId))
@@ -64,6 +71,11 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
                 cfg.Telemetry.InstanceId = Guid.NewGuid().ToString();
                 cfg.Telemetry.JitterMinutes = Random.Shared.Next(0, 720);
             }
+
+            // Opting in by any path answers the one-time Overview notice, so it never comes
+            // back, even if telemetry is later turned off again.
+            if (cfg.Telemetry.Enabled)
+                cfg.Telemetry.BannerDismissed = true;
         }
         base.UpdateConfiguration(configuration);
     }
@@ -123,11 +135,6 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
                 EmbeddedResourcePath = $"{GetType().Namespace}.Web.configPage.html",
                 EnableInMainMenu = true,
                 DisplayName = "Jellyscribe",
-            },
-            new PluginPageInfo
-            {
-                Name = "letterboxdstats",
-                EmbeddedResourcePath = $"{GetType().Namespace}.Web.statsPage.html",
             },
             new PluginPageInfo
             {

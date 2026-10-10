@@ -177,7 +177,7 @@ public class SecretProtectorTests : IDisposable
     {
         var config = new PluginConfiguration
         {
-            JellyseerrUrl = "http://192.168.1.122:5055",
+            JellyseerrUrl = "http://seerr.local:5055",
             JellyseerrApiKey = "MTIzNDU2Nzg5MA=="
         };
 
@@ -202,7 +202,8 @@ public class SecretProtectorTests : IDisposable
 
         Assert.DoesNotContain("LetterboxdPasswordProtected", json);
         Assert.DoesNotContain("RawCookiesProtected", json);
-        Assert.Contains("\"LetterboxdPassword\":\"secret\"", json);
+        Assert.DoesNotContain("\"secret\"", json);
+        Assert.DoesNotContain("\"cookie\"", json);
 
         var config = new PluginConfiguration { JellyseerrApiKey = "key" };
         var configJson = System.Text.Json.JsonSerializer.Serialize(config);
@@ -211,7 +212,7 @@ public class SecretProtectorTests : IDisposable
         var serializdAccount = new SerializdAccount { Password = "serializd-secret" };
         var serializdJson = System.Text.Json.JsonSerializer.Serialize(serializdAccount);
         Assert.DoesNotContain("SerializdPasswordProtected", serializdJson);
-        Assert.Contains("\"Password\":\"serializd-secret\"", serializdJson);
+        Assert.DoesNotContain("serializd-secret", serializdJson);
     }
 
     private static string SerializeToString<T>(T value)

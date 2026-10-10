@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Security.Claims;
 using System.Threading.Tasks;
 using LetterboxdSync.Api;
 using Microsoft.AspNetCore.Mvc;
@@ -112,12 +113,60 @@ public class LetterboxdVerifyLoginTests : IDisposable
     }
 
     [Fact]
-    public void PutAccount_EmailAddress_IsRefused()
+    public async Task RepeatedFailedChecks_AreRefusedWith429_BeforeAnyLoginAttempt()
     {
+        Logins(api: new Exception("bad"), website: new Exception("bad"));
         using var h = new ControllerTestHarness(UserId);
-        var result = h.Controller.PutAccount(new AccountUpdateRequest { LetterboxdUsername = "someone@example.com", LetterboxdPassword = "pw", Enabled = true });
-        Assert.IsType<BadRequestObjectResult>(result);
-        Assert.Empty(h.Config.Accounts);
+
+        for (var i = 0; i < LoginCheckLimiter.PerUserLimit; i++)
+            Assert.IsType<BadRequestObjectResult>(await h.Controller.VerifyLogin(
+                new LetterboxdVerifyRequest { LetterboxdUsername = "8bitproxy", LetterboxdPassword = "guess" + i }));
+        var callsBefore = (_apiCalls, _websiteCalls);
+
+        var refused = Assert.IsAssignableFrom<ObjectResult>(await h.Controller.VerifyLogin(
+            new LetterboxdVerifyRequest { LetterboxdUsername = "8bitproxy", LetterboxdPassword = "another" }));
+
+        Assert.Equal(429, refused.StatusCode);
+        Assert.StartsWith("Too many login checks. Try again in 10 minutes", Prop<string>(refused.Value!, "error"));
+        Assert.Equal(callsBefore, (_apiCalls, _websiteCalls));
+        Assert.Equal("600", h.Controller.Response.Headers.RetryAfter.ToString());
+    }
+
+    [Fact]
+    public async Task SuccessfulChecks_DoNotUseUpTheBudget()
+    {
+        Logins();
+        using var h = new ControllerTestHarness(UserId);
+
+        for (var i = 0; i < LoginCheckLimiter.PerUserLimit * 3; i++)
+            Assert.IsType<OkObjectResult>(await h.Controller.VerifyLogin(
+                new LetterboxdVerifyRequest { LetterboxdUsername = "account" + i, LetterboxdPassword = "pw" }));
+    }
+
+    [Fact]
+    public async Task WebsiteFallbackSuccesses_AreRefundedToo()
+    {
+        Logins(api: new Exception("api refused"));
+        using var h = new ControllerTestHarness(UserId);
+
+        for (var i = 0; i < LoginCheckLimiter.PerUserLimit * 3; i++)
+            Assert.IsType<OkObjectResult>(await h.Controller.VerifyLogin(
+                new LetterboxdVerifyRequest { LetterboxdUsername = "account" + i, LetterboxdPassword = "pw" }));
+    }
+
+    [Fact]
+    public async Task OneUsersFailures_DoNotBlockAnotherUser()
+    {
+        Logins(api: new Exception("bad"), website: new Exception("bad"));
+        using var h = new ControllerTestHarness(UserId);
+        for (var i = 0; i < LoginCheckLimiter.PerUserLimit; i++)
+            await h.Controller.VerifyLogin(new LetterboxdVerifyRequest { LetterboxdUsername = "x", LetterboxdPassword = "y" + i });
+
+        h.Controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+            new ClaimsIdentity(new[] { new Claim("Jellyfin-UserId", "00112233445566778899aabbccddeeff") }, "Test"));
+        var other = await h.Controller.VerifyLogin(new LetterboxdVerifyRequest { LetterboxdUsername = "x", LetterboxdPassword = "z" });
+
+        Assert.IsType<BadRequestObjectResult>(other);
     }
 
     [Theory]

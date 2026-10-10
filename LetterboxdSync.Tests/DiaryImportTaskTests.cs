@@ -216,6 +216,43 @@ public class DiaryImportTaskTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecuteAsync_WhileALetterboxdSyncHoldsTheGate_WaitsForItBeforeLoggingIn()
+    {
+        var (user, userId) = MakeUser("lachlan");
+        _userManager.GetUsers().Returns(new[] { user });
+        Plugin.Instance!.Configuration.Accounts.Add(new Account
+        {
+            UserJellyfinId = userId,
+            LetterboxdUsername = "u",
+            Enabled = true,
+            EnableDiaryImport = true
+        });
+        var factoryCalled = false;
+        LetterboxdServiceFactory.OverrideForTesting = (_, _, _, _, _) =>
+        {
+            factoryCalled = true;
+            return Task.FromResult(Substitute.For<ILetterboxdService>());
+        };
+
+        Assert.True(await SyncGate.Instance.WaitAsync(0));
+        Task import;
+        try
+        {
+            import = _task.ExecuteAsync(new Progress<double>(), CancellationToken.None);
+            Assert.False(import.IsCompleted);
+            Assert.False(factoryCalled, "a diary import must not hit Letterboxd while a sync holds the gate");
+        }
+        finally
+        {
+            SyncGate.Instance.Release();
+        }
+
+        await import;
+        Assert.True(factoryCalled);
+        Assert.False(SyncGate.IsRunning);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_AuthFails_SkipsUserButContinues()
     {
         var (user, userId) = MakeUser("lachlan");
@@ -426,12 +463,13 @@ public class DiaryImportTaskTests : IDisposable
     }
 
     [Fact]
-    public void GetDefaultTriggers_ReturnsDailyInterval()
+    public void GetDefaultTriggers_ReturnsDailyTrigger()
     {
         var triggers = _task.GetDefaultTriggers().ToList();
 
-        Assert.Single(triggers);
-        Assert.Equal(TimeSpan.FromDays(1).Ticks, triggers[0].IntervalTicks);
+        Assert.Equal(2, triggers.Count);
+        Assert.Equal(MediaBrowser.Model.Tasks.TaskTriggerInfoType.DailyTrigger, triggers[0].Type);
+        Assert.Equal(new TimeSpan(3, 40, 0).Ticks, triggers[0].TimeOfDayTicks);
     }
 
     [Fact]

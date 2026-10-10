@@ -24,7 +24,7 @@ public class PluginConfiguration : BasePluginConfiguration
     public List<SerializdAccount> SerializdAccounts { get; set; } = new List<SerializdAccount>();
 
     /// <summary>
-    /// Base URL of the Seerr instance, e.g. "http://192.168.1.122:5055" or "https://requests.example.com".
+    /// Base URL of the Seerr instance, e.g. "http://seerr.local:5055" or "https://requests.example.com".
     /// Trailing slash is stripped at use time.
     /// </summary>
     public string? JellyseerrUrl { get; set; }
@@ -33,7 +33,24 @@ public class PluginConfiguration : BasePluginConfiguration
     /// Seerr API key (Settings → General → API Key in Seerr).
     /// </summary>
     [XmlIgnore]
+    [JsonIgnore]
     public string? JellyseerrApiKey { get; set; }
+
+    /// <summary>Write-only JSON form of <see cref="JellyseerrApiKey"/>. See <see cref="Account.LetterboxdPasswordInput"/>.</summary>
+    [XmlIgnore]
+    [JsonPropertyName("JellyseerrApiKey")]
+    public string? JellyseerrApiKeyInput
+    {
+        internal get => JellyseerrApiKey;
+        set => JellyseerrApiKey = value;
+    }
+
+    [XmlIgnore]
+    public bool HasJellyseerrApiKey => !string.IsNullOrEmpty(JellyseerrApiKey);
+
+    /// <summary>Write-only: true on a config POST drops the stored key, which an empty value would keep.</summary>
+    [XmlIgnore]
+    public bool ClearJellyseerrApiKey { internal get; set; }
 
     /// <summary>Encrypted on-disk form of <see cref="JellyseerrApiKey"/>. See <see cref="Configuration.Account.LetterboxdPasswordProtected"/> for why this is JsonIgnore'd.</summary>
     [XmlElement("JellyseerrApiKey")]
@@ -47,16 +64,17 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>
     /// Approve the requests this plugin creates in Seerr, so they actually reach Radarr/Sonarr.
     /// <para>
-    /// Seerr decides auto-approval from the permissions of the user a request is attributed to,
-    /// not from the API key used to create it. A request attributed to a Seerr user without
-    /// "Auto-Approve" is therefore created as PENDING and never handed to Radarr, even though the
-    /// API key belongs to an admin. That is issue #110: requests show up in Seerr but nothing
-    /// downloads. With this on, the plugin follows a PENDING request with
-    /// POST /api/v1/request/{id}/approve using the admin API key.
+    /// The plugin creates each request as the Seerr user it is for (X-API-User), so Seerr applies
+    /// that user's own permissions: a user without "Auto-Approve" gets a PENDING request, which
+    /// Seerr never hands to Radarr/Sonarr until someone approves it (the symptom of issue #110).
+    /// With this on, the plugin follows a PENDING request with POST /api/v1/request/{id}/approve
+    /// using the admin API key; the Letterboxd watchlist sync also approves that user's earlier
+    /// pending requests for films on the watchlist (SeerrClient.ApprovePendingForUserAsync).
     /// </para>
     /// <para>
     /// Defaults to true: enabling per-account auto-request already expresses "go and fetch these".
-    /// Turn it off to keep plugin-created requests in Seerr's manual approval queue.
+    /// Turn it off and requests wait in Seerr's approval queue unless the requesting Seerr user
+    /// has Auto-Approve there.
     /// </para>
     /// </summary>
     public bool AutoApproveJellyseerrRequests { get; set; } = true;

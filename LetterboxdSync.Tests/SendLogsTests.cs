@@ -91,6 +91,7 @@ public class SendLogsTests : IDisposable
     [InlineData("PreviewLogs")]
     [InlineData("GetLogs")]          // raw server logs name every user's Letterboxd account + films
     [InlineData("GetTelemetryPreview")]
+    [InlineData("RegenerateTelemetryId")]
     public void SensitiveEndpoints_RequireElevation(string methodName)
     {
         var method = typeof(LetterboxdController).GetMethod(methodName, BindingFlags.Public | BindingFlags.Instance);
@@ -117,6 +118,95 @@ public class SendLogsTests : IDisposable
         Assert.Contains("a diagnostic line", content.Content!);
         Assert.Contains("\"telemetry\"", content.Content!);
         Assert.Contains("\"log_lines\"", content.Content!);
+    }
+
+    [Fact]
+    public async Task PreviewAndSend_MaskEveryEmail_AndShowTheSameLines()
+    {
+        // Older logs (and any email typed as a login or quoted in an error) still carry
+        // addresses; none may reach the preview or the upload.
+        var logFile = System.IO.Path.Combine(_h.LogDir, "log_20260614.log");
+        System.IO.File.WriteAllText(logFile,
+            "[2026-06-14 10:00:00.000 +00:00] [ERR] [1] LetterboxdSync.Serializd: catch-up failed for alex as demo@example.com: 503\n" +
+            "[2026-06-14 10:00:01.000 +00:00] [INF] [1] LetterboxdSync.Foo: login for First.Last+tv@mail.example.co.uk ok\n" +
+            "    at LetterboxdSync.Foo.Bar() reported by ops@jellyfin.example\n");
+
+        var preview = Assert.IsType<ContentResult>(_h.Controller.PreviewLogs()).Content!;
+        await _h.Controller.SendLogs(new SendLogsRequest { Note = null });
+        var (_, sent) = Assert.Single(_sent);
+
+        foreach (var bundle in new[] { preview, sent })
+        {
+            Assert.DoesNotContain("demo@example.com", bundle);
+            Assert.DoesNotContain("First.Last+tv@mail.example.co.uk", bundle);
+            Assert.DoesNotContain("ops@jellyfin.example", bundle);
+            Assert.Contains("catch-up failed for alex as [email]: 503", bundle);
+            Assert.Contains("login for [email] ok", bundle);
+            Assert.Contains("reported by [email]", bundle);
+        }
+        Assert.Equal(preview, sent);
+    }
+
+    [Fact]
+    public async Task PreviewWithTheTypedNote_IsByteForByteWhatTheSendUploads()
+    {
+        // Telemetry has never been on here, so the bundle carries a one-off id: the preview
+        // must show the same one the send then uploads.
+        Assert.True(string.IsNullOrEmpty(_h.Config.Telemetry.InstanceId));
+        var logFile = System.IO.Path.Combine(_h.LogDir, "log_20260614.log");
+        System.IO.File.WriteAllText(logFile,
+            "[2026-06-14 10:00:00.000 +00:00] [INF] [1] LetterboxdSync.Foo: a diagnostic line\n");
+
+        var preview = Assert.IsType<ContentResult>(_h.Controller.PreviewLogs(new SendLogsRequest { Note = "sync stops at film 3" })).Content!;
+        await _h.Controller.SendLogs(new SendLogsRequest { Note = "sync stops at film 3" });
+
+        var (_, sent) = Assert.Single(_sent);
+        Assert.Equal(preview, sent);
+        Assert.Contains("sync stops at film 3", preview);
+    }
+
+    [Fact]
+    public async Task ALongNote_IsCutToWhatTheBackendKeeps_InThePreviewAndTheSend()
+    {
+        var note = new string('n', 2500);
+        var preview = Assert.IsType<ContentResult>(_h.Controller.PreviewLogs(new SendLogsRequest { Note = note })).Content!;
+        await _h.Controller.SendLogs(new SendLogsRequest { Note = note });
+
+        var (_, sent) = Assert.Single(_sent);
+        Assert.Equal(preview, sent);
+        using var doc = JsonDocument.Parse(sent);
+        Assert.Equal(2000, doc.RootElement.GetProperty("note").GetString()!.Length);
+    }
+
+    [Fact]
+    public void ReviewRepliesLoggedByOlderReleases_LoseTheirBody_ContinuationLinesIncluded()
+    {
+        var logFile = System.IO.Path.Combine(_h.LogDir, "log_20260614.log");
+        System.IO.File.WriteAllText(logFile,
+            "[2026-06-14 10:00:00.000 +00:00] [INF] [1] LetterboxdSync.LetterboxdDiary: Review response for sinners: status=201, body={\"text\":\"first line of my draft\n" +
+            "second line of my draft\"}\n" +
+            "[2026-06-14 10:00:01.000 +00:00] [INF] [1] LetterboxdSync.Foo: next entry\n" +
+            "   at LetterboxdSync.Foo.Bar()\n");
+
+        var preview = Assert.IsType<ContentResult>(_h.Controller.PreviewLogs()).Content!;
+
+        Assert.DoesNotContain("my draft", preview);
+        Assert.Contains("Review response for sinners: status=201, body=[removed]", preview);
+        Assert.Contains("next entry", preview);
+        Assert.Contains("at LetterboxdSync.Foo.Bar()", preview);
+    }
+
+    [Fact]
+    public void TheLogsTab_MasksEmailsToo()
+    {
+        var logFile = System.IO.Path.Combine(_h.LogDir, "log_20260614.log");
+        System.IO.File.WriteAllText(logFile,
+            "[2026-06-14 10:00:00.000 +00:00] [ERR] [1] LetterboxdSync.Serializd: catch-up failed for alex as demo@example.com\n");
+
+        var ok = Assert.IsType<OkObjectResult>(_h.Controller.GetLogs());
+        var body = JsonSerializer.Serialize(ok.Value);
+        Assert.DoesNotContain("demo@example.com", body);
+        Assert.Contains("catch-up failed for alex as [email]", body);
     }
 
     [Fact]
