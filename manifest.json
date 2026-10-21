@@ -8,6 +8,14 @@
     "category": "General",
     "versions": [
       {
+        "version": "2.13.2.1",
+        "changelog": "Upstream v2.13.2 retargeted to Jellyfin 12 (.NET 10).",
+        "targetAbi": "12.0.0.0",
+        "sourceUrl": "https://github.com/iceyas3301/Jellyscribe/releases/download/v2.13.2-jf12/jellyfin-plugin-letterboxd-v2.13.2-jf12.zip",
+        "checksum": "2b325be8a5bee4c37540158941aa449b",
+        "timestamp": "2026-10-22T00:00:00Z"
+      },
+      {
         "version": "2.13.2.0",
         "changelog": "Jellyscribe updates the library it uses to read Letterboxd web pages, which it relies on when an account signs in through the website and when it finds films on letterboxd.com. Nothing changes in how syncing works. The website sign-in, film lookups, diary entries and ratings were all checked against letterboxd.com with the new version.",
         "targetAbi": "10.11.9.0",
@@ -89,7 +97,7 @@
       },
       {
         "version": "2.10.9.0",
-        "changelog": "The Jellyscribe dashboards now keep your accounts safe when something goes wrong. If your accounts or activity can't be loaded, the page says so and offers Retry instead of showing an empty list or zeros, so a save can no longer wipe your linked diaries. A failed or repeated Save never adds an account twice, and Remove now asks you to confirm in the page and only removes the account once the server has. Every save, sync, login check and review now tells you when it fails and why, rather than hanging on \"Saving…\" or claiming everything was up to date, and a sync whose progress can't be read stops with a clear message. A review with only a star rating now sets your Letterboxd rating instead of always failing. A review that lands on some of your accounts says which ones it missed. Review is no longer offered on rows that can't be reviewed. The rewatch date defaults to your own local date, and selecting text in a modal no longer closes it. On the admin dashboard, saving settings no longer undoes account changes your users made in the meantime, Sync all now also runs the TV sync for every user, and the overview is labelled as your own activity. Opening Jellyscribe from the sidebar while the admin settings page is still loaded now works. Thanks to Wouter Stulp, whose fixes for showing load and save failures and for reporting the Integrations save result are included.",
+        "changelog": "The Jellyscribe dashboards now keep your accounts safe when something goes wrong. If your accounts or activity can't be loaded, the page says so and offers Retry instead of showing an empty list or zeros, so a save can no longer wipe your linked diaries. A failed or repeated Save never adds an account twice, and Remove now asks you to confirm in the page and only removes the account once the server has. Every save, sync, login check and review now tells you when it fails and why, rather than hanging on \"Saving\u2026\" or claiming everything was up to date, and a sync whose progress can't be read stops with a clear message. A review with only a star rating now sets your Letterboxd rating instead of always failing. A review that lands on some of your accounts says which ones it missed. Review is no longer offered on rows that can't be reviewed. The rewatch date defaults to your own local date, and selecting text in a modal no longer closes it. On the admin dashboard, saving settings no longer undoes account changes your users made in the meantime, Sync all now also runs the TV sync for every user, and the overview is labelled as your own activity. Opening Jellyscribe from the sidebar while the admin settings page is still loaded now works. Thanks to Wouter Stulp, whose fixes for showing load and save failures and for reporting the Integrations save result are included.",
         "targetAbi": "10.11.9.0",
         "sourceUrl": "https://lbsync-telemetry.lachlanbyoung.workers.dev/dl/v2.10.9/jellyfin-plugin-letterboxd-v2.10.9.zip",
         "checksum": "ac7f44ef6dbf30b0bc84c5768f2b4f9a",
@@ -433,7 +441,7 @@
       },
       {
         "version": "1.16.0.0",
-        "changelog": "New: anonymous, opt-in usage telemetry — off by default, enabled via a one-time dashboard banner or Settings. One small bucketed ping a week (versions, enabled features, size buckets; never film titles, usernames, IPs, or exact numbers), a Preview-exact-JSON button showing precisely what's sent, a regenerable random instance ID, and an extra capped ping when errors start occurring so fleet-wide breakage is caught early. Full payload documented in the README. No other behaviour changes.",
+        "changelog": "New: anonymous, opt-in usage telemetry \u2014 off by default, enabled via a one-time dashboard banner or Settings. One small bucketed ping a week (versions, enabled features, size buckets; never film titles, usernames, IPs, or exact numbers), a Preview-exact-JSON button showing precisely what's sent, a regenerable random instance ID, and an extra capped ping when errors start occurring so fleet-wide breakage is caught early. Full payload documented in the README. No other behaviour changes.",
         "targetAbi": "10.11.9.0",
         "sourceUrl": "https://lbsync-telemetry.lachlanbyoung.workers.dev/dl/v1.16.0/jellyfin-plugin-letterboxd-v1.16.0.zip",
         "checksum": "c10b05242f191c382ad0aa29164d97e7",
@@ -513,7 +521,7 @@
       },
       {
         "version": "1.13.2.0",
-        "changelog": "Maintenance release. The manifest changelog field and the letterboxdsync.dev Releases page now match the v1.0–v1.12 single-paragraph user-facing prose style after v1.13.0 (rendered as a multi-paragraph incident report) and v1.13.1 (rendered as the raw conventional-commit subject line) drifted away from it. The release workflow now pulls the manifest changelog from a `## Release notes` section in the merged PR's body via the GitHub API, so the prose that lands in users' plugin catalogs is deliberate and reviewable. Backfills the two missing structured entries on the Releases page and rewrites the two stale manifest entries inline. No plugin behaviour changes.",
+        "changelog": "Maintenance release. The manifest changelog field and the letterboxdsync.dev Releases page now match the v1.0\u2013v1.12 single-paragraph user-facing prose style after v1.13.0 (rendered as a multi-paragraph incident report) and v1.13.1 (rendered as the raw conventional-commit subject line) drifted away from it. The release workflow now pulls the manifest changelog from a `## Release notes` section in the merged PR's body via the GitHub API, so the prose that lands in users' plugin catalogs is deliberate and reviewable. Backfills the two missing structured entries on the Releases page and rewrites the two stale manifest entries inline. No plugin behaviour changes.",
         "targetAbi": "10.11.10.0",
         "sourceUrl": "https://lbsync-telemetry.lachlanbyoung.workers.dev/dl/v1.13.2/jellyfin-plugin-letterboxd-v1.13.2.zip",
         "checksum": "0b849abb518ebbdf526a90fbd9d1abfd",
