@@ -10,6 +10,52 @@ export type ReleaseNotes = {
 
 export const releaseNotes: ReleaseNotes[] = [
   {
+    version: '2.13.2',
+    headline: 'An updated page-reading library',
+    summary:
+      'Jellyscribe updates the library it uses to read Letterboxd web pages, which it relies on when an account signs in through the website and when it finds films on letterboxd.com. Nothing changes in how syncing works: the website sign-in, film lookups, diary entries and ratings were all checked against letterboxd.com with the new version.',
+    highlights: {
+      improvements: [
+        'The library Jellyscribe uses to read Letterboxd pages is updated to its current release.',
+      ],
+    },
+  },
+  {
+    version: '2.13.1',
+    headline: 'Signing in through the Letterboxd website works again',
+    summary:
+      'When the official sign-in does not work for an account, Jellyscribe signs in through the Letterboxd website instead. Letterboxd changed its sign-in page, and since then that fallback has failed every time with "The form on this page had expired", so those accounts could not sync at all. Jellyscribe now reads the sign-in page the way it works today, and the fallback signs in, logs films and saves ratings again. Accounts that sign in the official way were never affected.',
+    highlights: {
+      fixes: [
+        'The website sign-in fallback no longer fails with "The form on this page had expired".',
+        'Ratings changed in Jellyfin reach Letterboxd for accounts that sign in through the website, confirmed against letterboxd.com.',
+      ],
+    },
+  },
+  {
+    version: '2.13.0',
+    headline: 'Choose whether watched titles are requested again',
+    summary:
+      'Each linked diary has a new option, "Re-request watched titles", next to the other Seerr settings on both the admin page and your own page. Auto-request now skips films and seasons you have already watched (see below), so a cleanup tool deleting them does not download them again. If you want the old behaviour, for example because you rewatch and like the library to keep everything on your watchlist, turn this on for that account. It is off by default, so nothing changes unless you choose it.',
+    highlights: {
+      new: [
+        'A per-account "Re-request watched titles" option brings back requesting films and seasons you have already watched once they leave the library.',
+      ],
+    },
+  },
+  {
+    version: '2.12.4',
+    headline: 'Shows and films you have already watched are not requested again',
+    summary:
+      'With Seerr auto-request on, a watchlisted title that a cleanup tool deleted after you watched it no longer comes back. Before, Jellyscribe saw it missing from the library and filed a new Seerr request under your name, so a show you had finished could download again every time it was cleared out. Now anything Jellyscribe has logged for you is left alone. For TV this works season by season: a season you have watched any of is skipped, and a season you have not started, such as a new one, is still requested. Films and shows you have never watched are requested exactly as before.',
+    highlights: {
+      fixes: [
+        'A watchlisted show or film you already watched is not requested again through Seerr after a cleanup tool deletes it.',
+        'For TV, only the seasons you have never watched are requested, so a new season of a show you finished still arrives.',
+      ],
+    },
+  },
+  {
     version: '2.12.3',
     headline: 'Editing an account keeps every setting it already has',
     summary:
