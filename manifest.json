@@ -8,6 +8,14 @@
     "category": "General",
     "versions": [
       {
+        "version": "2.14.0.0",
+        "changelog": "Merge upstream main (v2.13.2) into fork; fork line bumped to 2.14.0.0",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://lbsync-telemetry.lachlanbyoung.workers.dev/dl/v2.14.0/jellyfin-plugin-letterboxd-v2.14.0.zip",
+        "checksum": "73af038c9dc2e7242a209080fe649fd2",
+        "timestamp": "2026-10-24T04:26:56Z"
+      },
+      {
         "version": "2.13.2.0",
         "changelog": "Jellyscribe updates the library it uses to read Letterboxd web pages, which it relies on when an account signs in through the website and when it finds films on letterboxd.com. Nothing changes in how syncing works. The website sign-in, film lookups, diary entries and ratings were all checked against letterboxd.com with the new version.",
         "targetAbi": "10.11.9.0",
