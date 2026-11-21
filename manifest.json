@@ -8,6 +8,14 @@
     "category": "General",
     "versions": [
       {
+        "version": "2.16.0.0",
+        "changelog": "Merge upstream main (v2.15.2) into fork; fork line bumped to 2.16.0.0",
+        "targetAbi": "10.11.9.0",
+        "sourceUrl": "https://lbsync-telemetry.lachlanbyoung.workers.dev/dl/v2.16.0/jellyfin-plugin-letterboxd-v2.16.0.zip",
+        "checksum": "75ca6e6ef413dc1acf8b4c73b63304ce",
+        "timestamp": "2026-11-21T04:55:37Z"
+      },
+      {
         "version": "2.15.2.0",
         "changelog": "On some servers Jellyfin reports the end of a TV episode twice, a second apart, and Jellyscribe logged both to Serializd: a first watch appeared twice in the diary, the second time marked as a rewatch. A repeat that arrives within a few minutes of a logged finish is now ignored, so each watch is logged once, while watching an episode again later is still logged as a rewatch. Entries already duplicated on Serializd are not removed.",
         "targetAbi": "10.11.9.0",
