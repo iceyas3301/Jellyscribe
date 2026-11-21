@@ -75,9 +75,11 @@ public class LetterboxdSyncRunner
     internal const int OutageMinAttempts = 2;
 
     /// <summary>
-    /// After this many films in a row are refused with a block (a Cloudflare 403 or challenge),
-    /// the rest of the account's run waits for the next one. Each blocked film already costs
-    /// about a minute of backoff, so going on would hold the sync for hours and fail every film.
+    /// After this many films in a row are refused with a block (a Cloudflare 403 or challenge, or
+    /// an API session that expired and could not be renewed), the rest of the account's run waits
+    /// for the next one. A Cloudflare block already costs about a minute of backoff per film, and
+    /// an expired session fails every later request, so going on would hold the sync for hours
+    /// and fail every film.
     /// </summary>
     internal const int MaxConsecutiveBlocks = 3;
 
@@ -336,25 +338,19 @@ public class LetterboxdSyncRunner
         // Sort what's left so previously-failed films come first, if rate limits hit,
         // we make progress on the backlog instead of repeatedly retrying the same head of queue.
         int preFilterCount = movies.Count;
-        int locallySkipped = 0;
-
-        if (account.SkipPreviouslySynced)
+        var candidates = movies.Select(m =>
         {
-            var candidates = movies.Select(m =>
-            {
-                int? tid = int.TryParse(m.GetProviderId(MetadataProvider.Tmdb), out var v) ? v : null;
-                var ud = _userDataManager.GetUserData(user, m);
-                return (Item: m, TmdbId: tid, ViewingDate: ViewingDateFor(ud?.LastPlayedDate));
-            });
+            int? tid = int.TryParse(m.GetProviderId(MetadataProvider.Tmdb), out var v) ? v : null;
+            var ud = _userDataManager.GetUserData(user, m);
+            return (Item: m, TmdbId: tid, ViewingDate: ViewingDateFor(ud?.LastPlayedDate));
+        });
 
-            var (queue, skippedLocally) = BuildSyncQueue(
-                candidates,
-                user.Username ?? string.Empty,
-                (u, t, d) => SyncHistory.WasSuccessfullySynced(u, t, d, lbAccount),
-                (u, t) => SyncHistory.GetLastStatusForFilm(u, t, lbAccount));
-            movies = queue;
-            locallySkipped = skippedLocally;
-        }
+        var (queue, locallySkipped) = BuildSyncQueue(
+            candidates,
+            user.Username ?? string.Empty,
+            (u, t, d) => SyncHistory.WasSuccessfullySynced(u, t, d, lbAccount),
+            (u, t) => SyncHistory.GetLastStatusForFilm(u, t, lbAccount));
+        movies = queue;
 
         if (locallySkipped > 0)
             _logger.LogInformation("Skipping {Count} of {Total} films for {Username}: already in local sync history",
@@ -446,7 +442,6 @@ public class LetterboxdSyncRunner
                 // Throws when the check itself fails, which lands in the catch below as a
                 // retryable failure: an unanswered check must never be read as "not logged".
                 var diaryInfo = await service.GetDiaryInfoAsync(film.FilmId, lbAccount, cancellationToken).ConfigureAwait(false);
-                blocksInARow = 0;
                 if (Helpers.IsDuplicate(diaryInfo.LastDate, viewingDate))
                 {
                     _logger.LogInformation("Skipping {Title} (TMDb:{TmdbId}): already on Letterboxd diary for {Date}",
@@ -520,6 +515,11 @@ public class LetterboxdSyncRunner
                     Source = source
                 });
                 synced++;
+                // Reset only after a write Letterboxd accepted, never after the diary check alone
+                // (a duplicate skip is decided by that check): on the website path the check reads
+                // a public page that still answers when the session has gone, so a reset there
+                // would hide every refused write from the breaker.
+                blocksInARow = 0;
                 SyncProgress.IncrementProcessed(SyncProgress.TrackLetterboxd);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -549,13 +549,6 @@ public class LetterboxdSyncRunner
                 failed++;
                 SyncProgress.IncrementProcessed(SyncProgress.TrackLetterboxd);
 
-                if (account.StopOnFailure)
-                {
-                    _logger.LogWarning("Stop-on-failure enabled for {Username}: halting after {Synced} synced, {Skipped} skipped, {Failed} failed",
-                        user.Username, synced, skipped, failed);
-                    break;
-                }
-
                 blocksInARow = SyncErrors.IsBlock(ex) ? blocksInARow + 1 : 0;
                 if (blocksInARow >= MaxConsecutiveBlocks)
                 {
@@ -570,7 +563,7 @@ public class LetterboxdSyncRunner
                         Account = lbAccount,
                         Timestamp = DateTime.UtcNow,
                         Status = SyncStatus.Skipped,
-                        Error = $"Letterboxd blocked {blocksInARow} requests in a row (usually Cloudflare, or a long rate limit); the other {remaining} films wait for the next sync",
+                        Error = $"Letterboxd blocked {blocksInARow} requests in a row (usually Cloudflare, a long rate limit, or a sign-in that expired); the other {remaining} films wait for the next sync",
                         Source = source
                     });
                     break;
