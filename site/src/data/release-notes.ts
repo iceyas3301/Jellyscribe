@@ -10,6 +10,86 @@ export type ReleaseNotes = {
 
 export const releaseNotes: ReleaseNotes[] = [
   {
+    version: '2.15.2',
+    headline: 'Episodes are no longer logged twice as rewatches',
+    summary:
+      'On some servers Jellyfin reports the end of an episode twice, a second apart. Jellyscribe logged both to Serializd, so a first watch showed up twice in the diary, the second time as a rewatch. A repeat that arrives within a few minutes of a logged finish is now ignored, so each watch is logged once. Watching an episode again later is still logged as a rewatch. Entries already duplicated on Serializd are not removed.',
+    highlights: {
+      fixes: [
+        'Finishing a TV episode logs one Serializd diary entry, not a second one marked as a rewatch.',
+      ],
+    },
+  },
+  {
+    version: '2.15.1',
+    headline: 'TV shows are no longer requested again after a cleanup',
+    summary:
+      'With Seerr auto-request on for a Serializd watchlist, a show could come back after a cleanup tool deleted it. Seerr had already fetched the show, the tool removed it, and because it was still on the watchlist the next sync asked for it again, so it was downloaded again and again. The existing check for watched shows only covers episodes Jellyscribe logged to Serializd, so it missed shows watched before Serializd was linked. Seasons Seerr already fetched for you and that were deleted afterwards are now left alone; turn on "Re-request watched titles" if you want them back, or request them in Seerr. The activity list also showed a show as "Requested" on every sync while Seerr already had an open request for it, although nothing new was requested. Those rows are no longer recorded.',
+    highlights: {
+      fixes: [
+        'A TV season Seerr already fetched for you and that was deleted afterwards is not auto-requested again, unless "Re-request watched titles" is on.',
+        'A show Seerr already has an open request for no longer appears as "Requested" in the activity list on every sync.',
+      ],
+    },
+  },
+  {
+    version: '2.15.0',
+    headline: 'Fewer settings, and no ratings for films you have not watched',
+    summary:
+      'Letterboxd counts a rating as a watch, and Jellyfin stores a "Like" as a 10/10 rating. Watchlist features in other plugins set Likes on films nobody has played, so Jellyscribe was rating them 5 stars and Letterboxd showed them as watched. Ratings are now only sent for films you have played, so a Like no longer marks a film watched; use Review to rate a film you saw somewhere else. A Liked film you then watch is still logged with 5 stars, because Jellyfin cannot tell a Like from a 10/10 rating. Each account also has fewer settings. "Skip already-synced" is now always on, because turning it off made Serializd log every episode again on every sync. A film or episode Jellyscribe already logged is not logged again, even if you delete it on Letterboxd or Serializd. "Stop on first failure" is gone, because Jellyscribe already pauses an account when Letterboxd blocks it. "Primary account" only appears once you link a second account on the same service, and the Seerr settings only appear once an admin has set Seerr up, with the two request options tucked under "Auto-request via Seerr".',
+    highlights: {
+      fixes: [
+        'A film you have not played is never rated on Letterboxd automatically, so a watchlist Like no longer marks it as watched.',
+        'Serializd can no longer log the same episodes again on every sync: skipping what is already logged is always on.',
+      ],
+      improvements: [
+        'The account settings only show what can do something: Primary account once you have two accounts on a service, and the Seerr settings once Seerr is set up.',
+        '"Skip already-synced" and "Stop on first failure" are removed. Accounts that had Stop on first failure on now carry on past a failed title, and still pause if Letterboxd blocks them.',
+      ],
+    },
+  },
+  {
+    version: '2.14.1',
+    headline: 'Website sign-ins pause instead of failing every film',
+    summary:
+      'Some accounts sign in through the Letterboxd website instead of the official way. If Letterboxd ended that sign-in part way through a sync and signing in again did not bring it back, every remaining film in the sync failed, and each failure counted toward Jellyscribe giving up on that film. The sync now pauses that account after a few films, as the official sign-in has done since 2.13.3, and the rest wait for the next sync. The same goes for a sync where Letterboxd keeps refusing to save diary entries while still answering diary checks.',
+    highlights: {
+      fixes: [
+        'A website sign-in that ends mid-sync and cannot be restored pauses the account after a few films instead of failing the rest of the list.',
+        'A sync where Letterboxd refuses every diary entry it is sent now pauses too, even while diary checks still work.',
+      ],
+    },
+  },
+  {
+    version: '2.14.0',
+    headline: 'A clear first step on a new install',
+    summary:
+      'Opening Jellyscribe before linking an account used to show an empty dashboard of zeros, with sync buttons that could only fail. The overview now starts with one card that says what to do next. With no account linked, it offers to link Letterboxd or Serializd, and the sync buttons stay out of the way until there is something to sync. Once an account is linked but nothing has been logged yet, it explains what the first sync will send, including whether it sends everything you have already played or only recent watches and what happens to films and episodes already in your diary, and offers to run it for the services you linked. A user whose accounts are all paused is told so. The card goes away once your first film or episode is logged.',
+    highlights: {
+      new: [
+        'A getting-started card on the overview links your first diary, then runs your first sync.',
+      ],
+      improvements: [
+        'The sync buttons are hidden until an account is linked, and "Sync all now" only syncs the services you have an active account on, so it no longer reports an error for the other one.',
+      ],
+    },
+  },
+  {
+    version: '2.13.3',
+    headline: 'Long syncs keep going after the first hour',
+    summary:
+      'Letterboxd signs Jellyscribe in for about an hour at a time. A large sync, such as the first one on a new server, can take longer than that, and once the hour was up every remaining film failed, sometimes hundreds of them, until the next scheduled sync logged them. Jellyscribe now renews the sign-in before it runs out, so a long sync finishes in one go. If Letterboxd refuses to renew it, the sync pauses after a few films and picks up on the next run instead of marking the whole list as failed. Accounts that sign in through the Letterboxd website were not affected.',
+    highlights: {
+      fixes: [
+        'A sync that runs longer than an hour no longer fails every film after the first hour.',
+        'If Letterboxd will not renew the sign-in, the sync pauses after a few films instead of failing the rest of the list.',
+      ],
+      improvements: [
+        'Anonymous telemetry, for those who opted in, now sorts more errors into the right category, such as a Letterboxd outage or a timeout, instead of "other".',
+      ],
+    },
+  },
+  {
     version: '2.13.2',
     headline: 'An updated page-reading library',
     summary:

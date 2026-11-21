@@ -189,6 +189,47 @@ public class DashboardMarkupTests
         Assert.Contains("outline: 2px solid var(--ws-focus);", Rule(Style(file), root + " :focus-visible"), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void UserPage_FirstRunCard_StartsHidden_AndHiddenBeatsEveryLayout()
+    {
+        var page = Read("userPage.html");
+        var card = Regex.Match(page, "<div [^>]*id=\"firstRun\"[^>]*>").Value;
+        Assert.Contains(" hidden", card, StringComparison.Ordinal);
+        Assert.Contains("aria-labelledby=\"firstRunTitle\"", card, StringComparison.Ordinal);
+        // The card, and the header sync buttons it hides while nothing is linked, set their own display;
+        // without these rules the hidden attribute does nothing and they show on every load.
+        var style = PageStyle(page);
+        Assert.Contains("display: none;", Rule(style, "#letterboxdUserPage .ws-firstrun[hidden]"), StringComparison.Ordinal);
+        Assert.Contains("display: none;", Rule(style, "#letterboxdUserPage .ws-btn[hidden]"), StringComparison.Ordinal);
+
+        // The shared overview hands the page its stats on a successful load only; a failed load shows the retry row.
+        var shared = Read("jellyscribe.js");
+        var load = shared.Substring(shared.IndexOf("loadOverview: function", StringComparison.Ordinal));
+        load = load.Substring(0, load.IndexOf("histChunk:", StringComparison.Ordinal));
+        var hook = load.IndexOf("self.afterOverview(fs, ts)", StringComparison.Ordinal);
+        Assert.InRange(hook, 0, load.LastIndexOf(".catch(", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [MemberData(nameof(Pages))]
+    public void AccountDialog_KeepsEveryToggleRendered_AndIndentsTheRequestOptions(string file, string root)
+    {
+        var page = Code(file);
+        // "Skip already-synced" and "Stop on first failure" are gone from both services.
+        Assert.DoesNotContain("chkSkip", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("chkStop", page, StringComparison.Ordinal);
+
+        // Every toggle is still rendered, so saving keeps a hidden one's stored value. Which rows
+        // syncVisibility hides is checked only by the Playwright run (no JS test harness).
+        foreach (var id in new[] { "chkPrimary", "chkSeerr", "chkBackfill", "chkRerequest", "chkMirror" })
+            Assert.Contains("'" + id + "', !!a.", Read(file), StringComparison.Ordinal);
+
+        // The two request options sit indented under "Auto-request via Seerr".
+        Assert.Matches(@"'chkBackfill', [^\]]*, true\]", Read(file));
+        Assert.Matches(@"'chkRerequest', [^\]]*, true\]", Read(file));
+        Assert.Contains("margin-left:", Rule(Style(file), root + " .ws-checks label.sub"), StringComparison.Ordinal);
+    }
+
     [Theory]
     [MemberData(nameof(Files))]
     public void ActivityList_CanBeSearched_AndPagedToItsEnd(string file)
